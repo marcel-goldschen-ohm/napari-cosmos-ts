@@ -28,7 +28,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     """ napari dock widget for analysis of colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
 
         Image layer.metadata
-            ['image_filename'] = "abs/path/to/image/" --> !!! exported as "rel/path/to/image/from/export"
+            ['image_file_abspath'] = "abs/path/to/image/"
             ['point_zprojections']
                 [points-layer-name] = [NxT] zprojections for points-layer-name
         
@@ -79,6 +79,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
         # # testing
+        # layer = self.openTIFF('test.tif')
+        # print(layer.source)
+        # print(layer.source.path)
+        # print(layer.metadata['image_file_abspath'])
+
         # theta = 0.4
         # rot = np.array([
         #     [np.cos(theta), -np.sin(theta), 0],
@@ -396,6 +401,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             filename, _filter = QFileDialog.getSaveFileName(self, "Save data in MATLAB file format.", "", "MATLAB files (*.mat)")
             if filename == "":
                 return
+        sesseionAbsPath = os.path.abspath(filename)
+        sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
         mdict = {}
         mdict['date'] = self.dateEdit.text() + " "
         mdict['ID'] = self.idEdit.text() + " "
@@ -405,16 +412,18 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         for layer in self.viewer.layers:
             layerName = layer.name.replace(' ', '_')
             layerDict = {}
-            if self.isImageStackLayer(layer):
-                if 'image_filename' in layer.metadata:
-                    if not 'metadata' in layerDict:
-                        layerDict['metadata'] = {}
-                    imageAbsPath = os.path.abspath(layer.metadata['image_filename'])
-                    sesseionAbsPath = os.path.abspath(filename)
-                    sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
+            layerDict['metadata'] = {}
+            if self.isImageLayer(layer):
+                imageAbsPath = None
+                if layer.source.path is not None:
+                    imageAbsPath = os.path.abspath(layer.source.path)
+                elif 'image_file_abspath' in layer.metadata:
+                    imageAbsPath = os.path.abspath(layer.metadata['image_file_abspath'])
+                if imageAbsPath is not None:
                     imageRelPath = os.path.relpath(imageAbsPath, start=sessionAbsDir)
-                    layerDict['metadata']['image_filename'] = imageRelPath
-                if writeImageStackData:
+                    layerDict['metadata']['image_file_abspath'] = imageAbsPath
+                    layerDict['metadata']['image_file_relpath'] = imageRelPath
+                if writeImageStackData or (imageAbsPath is None) or not self.isImageStackLayer(layer):
                     if type(layer.data) is np.ndarray:
                         layerDict['image'] = layer.data
                     else:
@@ -422,13 +431,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                             layerDict['image'] = np.array(layer.data)
                         except:
                             pass
-                if not 'image' in layerDict:
-                    if not 'metadata' in layerDict:
-                        layerDict['metadata'] = {}
+                if 'image' not in layerDict:
                     layerDict['metadata']['image_shape'] = layer.data.shape
                     layerDict['metadata']['image_dtype'] = str(layer.data.dtype)
-            elif self.isImageLayer(layer):
-                layerDict['image'] = layer.data
             elif self.isPointsLayer(layer):
                 layerDict['points'] = layer.data
                 if not layer.features.empty:
@@ -456,11 +461,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 layerDict['edge_width'] = layer.edge_width
                 layerDict['edge_width_is_relative'] = layer.edge_width_is_relative
             for key in layer.metadata:
-                if key == "image_filename":
+                if key in ["image_file_abspath", "image_file_relpath"]:
                     continue
-                if not 'metadata' in layerDict:
-                    layerDict['metadata'] = {}
                 layerDict['metadata'][key] = layer.metadata[key]
+            if len(layerDict['metadata']) == 0:
+                del layerDict['metadata']
             mdict['layers'][layerName] = layerDict
         sio.savemat(filename, mdict)
 
@@ -471,6 +476,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             filename, _filter = QFileDialog.getOpenFileName(self, "Open MATLAB format data file.", "", "MATLAB files (*.mat)")
             if filename == "":
                 return
+        sesseionAbsPath = os.path.abspath(filename)
+        sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
         mdict = sio.loadmat(filename, simplify_cells=True)
         for key, value in mdict.items():
             if key == "date":
@@ -484,9 +491,14 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             elif key == "layers":
                 for layerName, layerDict in value.items():
                     layerName = layerName.replace('_', ' ')
+                    hasMetadata = 'metadata' in layerDict
                     affine = layerDict['affine']
                     opacity = layerDict['opacity']
                     blending = str(layerDict['blending'])
+                    isImageLayer = ('image' in layerDict) or (hasMetadata and ( \
+                        ('image_file_relpath' in layerDict['metadata']) \
+                        or ('image_file_abspath' in layerDict['metadata']) \
+                        or ('image_shape' in layerDict['metadata'])))
                     if 'points' in layerDict:
                         # points layer
                         points = layerDict['points']
@@ -505,45 +517,46 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                         edge_width_is_relative = layerDict['edge_width_is_relative']
                         self.viewer.add_points(points, name=layerName, features=features, affine=affine, opacity=opacity, blending=blending, 
                             size=size, symbol=symbol, face_color=face_color, edge_color=edge_color, edge_width=edge_width, edge_width_is_relative=edge_width_is_relative)
-                    else:
+                    elif isImageLayer:
                         # image layer
-                        image = None
-                        if 'image' in layerDict:
-                            image = layerDict['image']
-                        elif 'metadata' in layerDict and 'image_filename' in layerDict['metadata']:
-                            try:
-                                imageRelPath = layerDict['metadata']['image_filename']
-                                sesseionAbsPath = os.path.abspath(filename)
-                                sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
-                                imageAbsPath = os.path.join(sessionAbsDir, imageRelPath)
-                                image = tifffile.memmap(imageAbsPath)
-                            except:
-                                msg = QMessageBox(self)
-                                msg.setIcon(QMessageBox.Warning)
-                                msg.setText(f"Failed to load image {imageAbsPath}")
-                                msg.setStandardButtons(QMessageBox.Close)
-                                msg.exec_()
-                        if image is None and 'metadata' in layerDict:
-                            shape = layerDict['metadata']['image_shape']
-                            dtype = layerDict['metadata']['image_dtype']
-                            image = np.zeros(shape, dtype=dtype)  # ??? any better way to handle not having the image data?
+                        imageAbsPath = None
+                        if hasMetadata and ('image_file_relpath' in layerDict['metadata']):
+                            imageRelPath = layerDict['metadata']['image_file_relpath']
+                            imageAbsPath = os.path.join(sessionAbsDir, imageRelPath)
+                        elif hasMetadata and ('image_file_abspath' in layerDict['metadata']):
+                            imageAbsPath = os.path.abspath(layerDict['metadata']['image_file_abspath'])
                         contrast_limits = layerDict['contrast_limits']
                         gamma = layerDict['gamma']
                         colormap = str(layerDict['colormap'])
                         interpolation2d = str(layerDict['interpolation2d'])
-                        self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
-                            contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
+                        if 'image' in layerDict:
+                            image = layerDict['image']
+                            layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
+                                contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
+                            if imageAbsPath is not None:
+                                layer.metadata['image_file_abspath'] = imageAbsPath
+                        elif imageAbsPath is not None:
+                            try:
+                                image = tifffile.memmap(imageAbsPath)
+                                layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
+                                    contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
+                                layer.metadata['image_file_abspath'] = imageAbsPath
+                            except:
+                                try:
+                                    layer = self.viewer.open(path=imageAbsPath, layer_type="image")[0]
+                                    layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
+                                except:
+                                    msg = QMessageBox(self)
+                                    msg.setIcon(QMessageBox.Warning)
+                                    msg.setText(f"Failed to load image {imageAbsPath}")
+                                    msg.setStandardButtons(QMessageBox.Close)
+                                    msg.exec_()
                     if 'metadata' in layerDict:
                         layer = self.viewer.layers[-1]
                         for key in layerDict['metadata']:
-                            if key == "image_filename":
-                                imageRelPath = layerDict['metadata']['image_filename']
-                                sesseionAbsPath = os.path.abspath(filename)
-                                sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
-                                imageAbsPath = os.path.join(sessionAbsDir, imageRelPath)
-                                layer.metadata[key] = imageAbsPath
-                            else:
-                                layer.metadata[key] = layerDict['metadata'][key]
+                            if key in ["image_file_abspath", "image_file_relpath"]:
+                                continue
+                            layer.metadata[key] = layerDict['metadata'][key]
 
     def openTIFF(self, filename=None, memorymap=True):
         """ Open TIFF image file.
@@ -557,13 +570,18 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             return
         filenameNoExt = os.path.splitext(filename)[0]
         path, fileNoExt = os.path.split(filenameNoExt)
-        if memorymap:
-            data = tifffile.memmap(filename)
-        else:
-            data = tifffile.imread(filename)
-        self.viewer.add_image(data, name=fileNoExt, blending='additive')
-        layer = self.viewer.layers[-1]
-        layer.metadata['image_filename'] = os.path.abspath(filename)
+        try:
+            if memorymap:
+                data = tifffile.memmap(filename)
+            else:
+                data = tifffile.imread(filename)
+            layer = self.viewer.add_image(data, name=fileNoExt, blending='additive')
+            layer.metadata['image_file_abspath'] = os.path.abspath(filename)
+        except:
+            layer = self.viewer.open(path=filename, layer_type="image")[0]
+            layer.name = fileNoExt
+            layer.blending = 'additive'
+            layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
         return layer
     
     def imageLayers(self):
