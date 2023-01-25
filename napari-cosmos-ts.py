@@ -79,6 +79,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
         # # testing
+        self.unitTests()
         # layer = self.openTIFF('test.tif')
         # print(layer.source)
         # print(layer.source.path)
@@ -112,6 +113,74 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         # spots = np.random.uniform(0, 255, (15, 2))
         # self.viewer.add_points(spots, name='spots', size=9, edge_width=1, edge_width_is_relative=False, 
         #     edge_color='yellow', face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
+    
+    def unitTests(self):
+        data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
+        data3d = np.random.randint(0, 65536 + 1, [100, 1024, 1024]).astype(np.uint16)
+        points = np.random.uniform(0, 1023, size=[10, 2])
+
+        if not os.path.isdir("unit tests/"):
+            os.makedirs("unit tests/")
+        data2dPath = "unit tests/data2d.tif"
+        data3dPath = "unit tests/data3d.tif"
+        tifffile.imwrite(data2dPath, data2d)
+        tifffile.imwrite(data3dPath, data3d)
+
+        layer_data2d = self.openTIFF(data2dPath, memorymap=False)
+        layer_data2d.colormap = 'green'
+
+        layer_data3d = self.openTIFF(data3dPath, memorymap=False)
+        layer_data3d.colormap = 'magenta'
+
+        layer_data2d_memmap = self.openTIFF(data2dPath, memorymap=True)
+        layer_data2d_memmap.name = "data2d memmap"
+        layer_data2d_memmap.colormap = 'cyan'
+
+        layer_data3d_memmap = self.openTIFF(data3dPath, memorymap=True)
+        layer_data3d_memmap.name = "data3d memmap"
+        layer_data3d_memmap.colormap = 'red'
+
+        n_points = len(points)
+        features = pd.DataFrame({"tags": [str(i) for i in range(n_points)]})
+        features.loc[3,"tags"] = ""
+        layer_points = self.viewer.add_points(points, name="points", features=features, 
+            size=5, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
+            face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
+        
+        sessionPath = 'unit tests/session.mat'
+        self.exportSession(sessionPath)
+        self.viewer.layers.clear()
+        self.importSession(sessionPath)
+
+        sesseionAbsPath = os.path.abspath(sessionPath)
+        sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
+        data2dAbsPath = os.path.abspath(data2dPath)
+        data3dAbsPath = os.path.abspath(data3dPath)
+        data2dRelPath = os.path.relpath(data2dAbsPath, start=sessionAbsDir)
+        data3dRelPath = os.path.relpath(data3dAbsPath, start=sessionAbsDir)
+
+        for layer in self.viewer.layers:
+            if layer.name == "data2d":
+                assert(np.all(layer.data == data2d))
+                assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+            elif layer.name == "data3d":
+                assert(np.all(layer.data == data3d))
+                assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+            elif layer.name == "data2d memmap":
+                assert(np.all(layer.data == data2d))
+                assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+            elif layer.name == "data3d memmap":
+                assert(np.all(layer.data == data3d))
+                assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+            elif layer.name == "points":
+                assert(np.all(layer.data == points))
+                # df = pd.DataFrame()
+                # df["tags export"] = features["tags"]
+                # df["tags import"] = layer.features["tags"]
+                # df["check"] = layer.features["tags"] == features["tags"]
+                # print(df)
+                for col in layer.features.columns:
+                    assert((layer.features[col] == features[col]).all())
     
     def printLayerMetadataStructure(self):
         for layer in self.viewer.layers:
@@ -414,6 +483,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             layerDict = {}
             layerDict['metadata'] = {}
             if self.isImageLayer(layer):
+                # image layer
                 imageAbsPath = None
                 if layer.source.path is not None:
                     imageAbsPath = os.path.abspath(layer.source.path)
@@ -435,16 +505,15 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                     layerDict['metadata']['image_shape'] = layer.data.shape
                     layerDict['metadata']['image_dtype'] = str(layer.data.dtype)
             elif self.isPointsLayer(layer):
+                # points layer
                 layerDict['points'] = layer.data
                 if not layer.features.empty:
                     layerDict['features'] = {}
                     for key in layer.features:
                         if key == 'tags':
                             layer.features['tags'].fillna("", inplace=True)
-                        if type(layer.features[key][0]) == str:
-                            layerDict['features'][key] = [astr + " " for astr in layer.features[key]]
-                        else:
-                            layerDict['features'][key] = layer.features[key]
+                            layer.features['tags'].replace("", " ", inplace=True)
+                        layerDict['features'][key] = layer.features[key].to_numpy()
             layerDict['affine'] = layer.affine.affine_matrix[-3:,-3:]
             layerDict['opacity'] = layer.opacity
             layerDict['blending'] = layer.blending
@@ -504,11 +573,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                         points = layerDict['points']
                         features = pd.DataFrame()
                         if 'features' in layerDict:
-                            for key, value in layerDict['features'].items():
-                                if type(value[0]) == str:
-                                    features[key] = [astr.strip() for astr in value]
-                                else:
-                                    features[key] = value
+                            for key in layerDict['features']:
+                                features[key] = layerDict['features'][key]
+                                if key == "tags":
+                                    features['tags'].replace(" ", "", inplace=True)
                         size = layerDict['size']
                         symbol = str(layerDict['symbol'])
                         face_color = layerDict['face_color']
