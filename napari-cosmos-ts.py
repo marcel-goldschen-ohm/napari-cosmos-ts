@@ -81,7 +81,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
         # unit tests
-        # self.unitTests()
+        self.unitTests()
     
     def unitTests(self):
         data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
@@ -509,10 +509,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         mdict['ID'] = self.idEdit.text() + " "
         mdict['experimenter'] = self.nameEdit.text() + " "
         mdict['notes'] = self.notesEdit.toPlainText() + " "
-        mdict['layers'] = {}
+        mdict['layers'] = []
         for layer in self.viewer.layers:
-            layerName = layer.name.replace(' ', '_')
             layerDict = {}
+            layerDict['name'] = layer.name
             layerDict['metadata'] = {}
             if self.isImageLayer(layer):
                 # image layer
@@ -567,7 +567,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 layerDict['metadata'][key] = layer.metadata[key]
             if len(layerDict['metadata']) == 0:
                 del layerDict['metadata']
-            mdict['layers'][layerName] = layerDict
+            mdict['layers'].append(layerDict)
         sio.savemat(filename, mdict)
 
     def importSession(self, filename=None):
@@ -590,8 +590,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             elif key == "notes":
                 self.notesEdit.setPlainText(str(mdict['notes']).strip())
             elif key == "layers":
-                for layerName, layerDict in value.items():
-                    layerName = layerName.replace('_', ' ')
+                for layerDict in value:
+                    layerName = layerDict['name']
                     hasMetadata = 'metadata' in layerDict
                     affine = layerDict['affine']
                     opacity = layerDict['opacity']
