@@ -65,7 +65,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.pointIndex = None
 
         # Default point mask to use for non-point locations.
-        self.defaultPointMask = self.getPointMask([6, 6])
+        self.defaultPointMask = self.getPointMask([5, 5])
 
         # setup UI
         self.initUI()
@@ -377,7 +377,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.minPeakHeightSpinBox.setValue(10)
 
         self.minPeakSeparationSpinBox = QDoubleSpinBox()
-        self.minPeakSeparationSpinBox.setValue(6)
+        self.minPeakSeparationSpinBox.setValue(self.defaultPointMask.shape[0])
 
         self.pointsSizeButton = QPushButton("Set point size for all selected points layers")
         self.pointsSizeButton.clicked.connect(lambda x: self.setSelectedPointsLayersPointSize())
@@ -397,7 +397,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.neighborsColocalizationLayerSelectionBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
 
         self.nearestNeighborDistanceCutoffSpinBox = QDoubleSpinBox()
-        self.nearestNeighborDistanceCutoffSpinBox.setValue(3)
+        self.nearestNeighborDistanceCutoffSpinBox.setValue(self.defaultPointMask.shape[0] / 2)
 
         self.colocalizationPlot = self.newPlot()
         self.colocalizationPlot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
