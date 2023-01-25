@@ -1377,7 +1377,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         tform = self.worldToLayerTransform3x3(layer)
         features = pd.DataFrame({"tags": [""] * n_points})
         self.viewer.add_points(points, name=name, affine=tform, features=features, 
-            size=minPeakSeparation, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
+            size=self.defaultPointMask.shape, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
             face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
     
     def visualizeColocalizationOfPointsLayers(self, pointsLayer, neighborsLayer, bins=30):
@@ -1603,7 +1603,8 @@ def zprojectPointInImageStack(imageStack, point, pointMask=None) -> np.ndarray:
             cols = cols[colsInImage]
             pointMaskInImage = np.reshape(rowsInImage, [-1, 1]) & np.reshape(colsInImage, [1, -1])
             pointMask = np.reshape(pointMask[pointMaskInImage], [1, len(rows), len(cols)])
-            zproj = np.squeeze(np.sum(imageStack[:,rows[0]:rows[-1]+1,cols[0]:cols[-1]+1] * pointMask, axis=(1, 2)))
+            # zproj = np.squeeze(np.sum(imageStack[:,rows[0]:rows[-1]+1,cols[0]:cols[-1]+1] * pointMask, axis=(1, 2)))
+            zproj = np.squeeze(np.mean(imageStack[:,rows[0]:rows[-1]+1,cols[0]:cols[-1]+1] * pointMask, axis=(1, 2)))
         else:
             zproj = np.array([])
     return zproj
