@@ -45,7 +45,6 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             ['point_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
-        - register point layers
         - support per frame point positions (point tracking)
         - z-projection tag filter custom AND, OR grouping
     """
