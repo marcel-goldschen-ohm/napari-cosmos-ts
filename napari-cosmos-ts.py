@@ -19,6 +19,10 @@ try:
     from pystackreg import StackReg
 except ImportError:
     StackReg = None
+try:
+    from pycpd import AffineRegistration
+except ImportError:
+    AffineRegistration = None
 
 __author__ = "Marcel Goldschen-Ohm <goldschen-ohm@utexas.edu, marcel.goldschen@gmail.com>"
 __version__ = '1.0.0'
@@ -175,29 +179,37 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         print(layer.metadata['image_file_abspath'])
 
         theta = 0.4
-        rot = np.array([
-            [np.cos(theta), -np.sin(theta), 0],
-            [np.sin(theta), np.cos(theta), 0],
+        tform = np.array([
+            [np.cos(theta), -np.sin(theta), 100],
+            [np.sin(theta), np.cos(theta), -25],
             [0, 0, 1]
         ])
 
-        layer = self.openTIFF('tmp/test.tif')
+        layer = self.openTIFF('test.tif')
         layer.name = 'eGFP'
         layer.colormap = 'green'
+        layer = self.zprojectImageLayer(layer, method="mean")
+        layer = self.gaussianFilterImageLayer(layer, sigma=1)
+        layer = self.tophatFilterImageLayer(layer, diskRadius=3)
+        layer = self.findPeaksInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
 
-        layer = self.openTIFF('tmp/test.tif')
+        layer = self.openTIFF('test.tif')
         layer.name = 'fcGMP'
         layer.colormap = 'magenta'
-        layer.affine = rot
+        layer.affine = tform
+        layer = self.zprojectImageLayer(layer, method="mean")
+        layer = self.gaussianFilterImageLayer(layer, sigma=1)
+        layer = self.tophatFilterImageLayer(layer, diskRadius=3)
+        layer = self.findPeaksInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
 
-        layer = self.openTIFF('spots.tif', memorymap=False)
-        layer.name = 'eGFP spots'
-        layer.colormap = 'green'
+        # layer = self.openTIFF('spots.tif', memorymap=False)
+        # layer.name = 'eGFP spots'
+        # layer.colormap = 'green'
 
-        layer = self.openTIFF('spots.tif', memorymap=False)
-        layer.name = 'fcGMP spots'
-        layer.colormap = 'magenta'
-        layer.affine = rot
+        # layer = self.openTIFF('spots.tif', memorymap=False)
+        # layer.name = 'fcGMP spots'
+        # layer.colormap = 'magenta'
+        # layer.affine = rot
 
         spots = np.random.uniform(0, 255, (15, 2))
         self.viewer.add_points(spots, name='spots', size=9, edge_width=1, edge_width_is_relative=False, 
@@ -962,10 +974,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         movingLayer.affine = tform @ fixedLayer.affine.affine_matrix[-3:,-3:]
     
     def registerPointLayers(self, fixedLayer, movingLayer, transformType):
-        if True:
+        if AffineRegistration is None:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
-            msg.setText("Points layer registration not yet implemented.")
+            msg.setText("Points registration requires pycpd.")
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
             return
@@ -976,7 +988,15 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
             return
-        # TODO
+        fixedPoints = fixedLayer.data
+        movingPoints = movingLayer.data
+        reg = AffineRegistration(X=fixedPoints, Y=movingPoints)
+        registeredPoints, (affine, translation) = reg.register()
+        tform = np.eye(3)
+        tform[:2,:2] = affine
+        tform[:2,-1] = translation
+        # apply net world transform to moving points
+        movingLayer.affine = tform @ fixedLayer.affine.affine_matrix[-3:,-3:]
     
     def copyLayerTransform(self, layer=None):
         if layer is None:
@@ -1321,7 +1341,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         projected = func(layer.data[frames], axis=0)
         name = layer.name + f" {method}-proj"
         tform = self.worldToLayerTransform3x3(layer)
-        self.viewer.add_image(projected, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+        return self.viewer.add_image(projected, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
     
     def gaussianFilterImageLayer(self, layer, sigma=None):
         if not self.isImageLayer(layer):
@@ -1339,7 +1359,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         filtered = filters.gaussian(layer.data, sigma=sigma, preserve_range=True)
         name = layer.name + " gauss-filt"
         tform = self.worldToLayerTransform3x3(layer)
-        self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+        return self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
 
     def tophatFilterImageLayer(self, layer, diskRadius=None):
         if not self.isImageLayer(layer):
@@ -1356,7 +1376,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             filtered = morphology.white_tophat(layer.data, disk)
         name = layer.name + " tophat-filt"
         tform = self.worldToLayerTransform3x3(layer)
-        self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+        return self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
 
     def findPeaksInImageLayer(self, layer, minPeakHeight=None, minPeakSeparation=None):
         if not self.isImageLayer(layer):
@@ -1375,7 +1395,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         name = layer.name + " peaks"
         tform = self.worldToLayerTransform3x3(layer)
         features = pd.DataFrame({"tags": [""] * n_points})
-        self.viewer.add_points(points, name=name, affine=tform, features=features, 
+        return self.viewer.add_points(points, name=name, affine=tform, features=features, 
             size=self.defaultPointMask.shape, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
             face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
     
@@ -1477,7 +1497,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         name = "colocalized " + pointsLayer.name + "-" + neighborsLayer.name
         tform = self.worldToLayerTransform3x3(pointsLayer)
         features = pd.DataFrame({"tags": [""] * n_points})
-        self.viewer.add_points(colocalizedPoints, name=name, affine=tform, features=features, 
+        return self.viewer.add_points(colocalizedPoints, name=name, affine=tform, features=features, 
             size=size, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
             face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
     
