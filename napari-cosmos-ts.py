@@ -41,10 +41,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             ['point_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
-        - find colocalized points based on criteria (nn-dist and #nn ?)
         - register point layers
         - support per frame point positions (point tracking)
-        - z-projection tag filter custom and, or grouping
+        - z-projection tag filter custom AND, OR grouping
     """
     
     def __init__(self, napari_viewer):
