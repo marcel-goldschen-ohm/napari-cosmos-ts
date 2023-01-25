@@ -253,7 +253,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         vbox.addStretch()
         self.addTab(tab, title)
     
-    def addImageProcessingTab(self, title="Process"):
+    def addImageProcessingTab(self, title="Image"):
         self.zprojectImageButton = QPushButton("Z-Project Image")
         self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
 
