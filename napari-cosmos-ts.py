@@ -78,41 +78,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_drag_callbacks.append(self.onMouseClickedOrDragged)
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
-        # # testing
-        self.unitTests()
-        # layer = self.openTIFF('test.tif')
-        # print(layer.source)
-        # print(layer.source.path)
-        # print(layer.metadata['image_file_abspath'])
-
-        # theta = 0.4
-        # rot = np.array([
-        #     [np.cos(theta), -np.sin(theta), 0],
-        #     [np.sin(theta), np.cos(theta), 0],
-        #     [0, 0, 1]
-        # ])
-
-        # layer = self.openTIFF('tmp/test.tif')
-        # layer.name = 'eGFP'
-        # layer.colormap = 'green'
-
-        # layer = self.openTIFF('tmp/test.tif')
-        # layer.name = 'fcGMP'
-        # layer.colormap = 'magenta'
-        # layer.affine = rot
-
-        # layer = self.openTIFF('spots.tif', memorymap=False)
-        # layer.name = 'eGFP spots'
-        # layer.colormap = 'green'
-
-        # layer = self.openTIFF('spots.tif', memorymap=False)
-        # layer.name = 'fcGMP spots'
-        # layer.colormap = 'magenta'
-        # layer.affine = rot
-
-        # spots = np.random.uniform(0, 255, (15, 2))
-        # self.viewer.add_points(spots, name='spots', size=9, edge_width=1, edge_width_is_relative=False, 
-        #     edge_color='yellow', face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
+        # unit tests
+        # self.unitTests()
     
     def unitTests(self):
         data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
@@ -197,6 +164,45 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                 else:
                                     zproj = zprojectPointInImageStack(imlayer.data, point, pointMask=pointMask)
                                     assert(np.allclose(zprojs[i], zproj))
+    
+    def customInit(self):
+        # This probably does NOT apply to you.
+        # This is for custom files as a quick test
+        # and will be removed in a future version.
+
+        layer = self.openTIFF('test.tif')
+        print(layer.source)
+        print(layer.source.path)
+        print(layer.metadata['image_file_abspath'])
+
+        theta = 0.4
+        rot = np.array([
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1]
+        ])
+
+        layer = self.openTIFF('tmp/test.tif')
+        layer.name = 'eGFP'
+        layer.colormap = 'green'
+
+        layer = self.openTIFF('tmp/test.tif')
+        layer.name = 'fcGMP'
+        layer.colormap = 'magenta'
+        layer.affine = rot
+
+        layer = self.openTIFF('spots.tif', memorymap=False)
+        layer.name = 'eGFP spots'
+        layer.colormap = 'green'
+
+        layer = self.openTIFF('spots.tif', memorymap=False)
+        layer.name = 'fcGMP spots'
+        layer.colormap = 'magenta'
+        layer.affine = rot
+
+        spots = np.random.uniform(0, 255, (15, 2))
+        self.viewer.add_points(spots, name='spots', size=9, edge_width=1, edge_width_is_relative=False, 
+            edge_color='yellow', face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
     
     def printLayerMetadataStructure(self):
         for layer in self.viewer.layers:
