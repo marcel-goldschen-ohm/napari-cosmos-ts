@@ -147,40 +147,56 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             size=5, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
             face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
         
-        sessionPath = 'unit tests/session.mat'
-        self.exportSession(sessionPath)
-        self.viewer.layers.clear()
-        self.importSession(sessionPath)
+        pointMasks = [np.array([[True]]), self.getPointMask(layer_points.size[0])]
+        for pointMask in pointMasks:
+            self.zprojectPointsLayer(layer_points, pointMask=pointMask)
+        
+            sessionPath = 'unit tests/session.mat'
+            self.exportSession(sessionPath)
+            self.viewer.layers.clear()
+            self.importSession(sessionPath)
 
-        sesseionAbsPath = os.path.abspath(sessionPath)
-        sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
-        data2dAbsPath = os.path.abspath(data2dPath)
-        data3dAbsPath = os.path.abspath(data3dPath)
-        data2dRelPath = os.path.relpath(data2dAbsPath, start=sessionAbsDir)
-        data3dRelPath = os.path.relpath(data3dAbsPath, start=sessionAbsDir)
+            sesseionAbsPath = os.path.abspath(sessionPath)
+            sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
+            data2dAbsPath = os.path.abspath(data2dPath)
+            data3dAbsPath = os.path.abspath(data3dPath)
+            data2dRelPath = os.path.relpath(data2dAbsPath, start=sessionAbsDir)
+            data3dRelPath = os.path.relpath(data3dAbsPath, start=sessionAbsDir)
 
-        for layer in self.viewer.layers:
-            if layer.name == "data2d":
-                assert(np.all(layer.data == data2d))
-                assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
-            elif layer.name == "data3d":
-                assert(np.all(layer.data == data3d))
-                assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
-            elif layer.name == "data2d memmap":
-                assert(np.all(layer.data == data2d))
-                assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
-            elif layer.name == "data3d memmap":
-                assert(np.all(layer.data == data3d))
-                assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
-            elif layer.name == "points":
-                assert(np.all(layer.data == points))
-                # df = pd.DataFrame()
-                # df["tags export"] = features["tags"]
-                # df["tags import"] = layer.features["tags"]
-                # df["check"] = layer.features["tags"] == features["tags"]
-                # print(df)
-                for col in layer.features.columns:
-                    assert((layer.features[col] == features[col]).all())
+            for layer in self.viewer.layers:
+                if layer.name == "data2d":
+                    assert(np.all(layer.data == data2d))
+                    assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+                elif layer.name == "data3d":
+                    assert(np.all(layer.data == data3d))
+                    assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+                elif layer.name == "data2d memmap":
+                    assert(np.all(layer.data == data2d))
+                    assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+                elif layer.name == "data3d memmap":
+                    assert(np.all(layer.data == data3d))
+                    assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+                elif layer.name == "points":
+                    assert(np.all(layer.data == points))
+                    # df = pd.DataFrame()
+                    # df["tags export"] = features["tags"]
+                    # df["tags import"] = layer.features["tags"]
+                    # df["check"] = layer.features["tags"] == features["tags"]
+                    # print(df)
+                    for col in layer.features.columns:
+                        assert((layer.features[col] == features[col]).all())
+                    for imlayer in self.viewer.layers:
+                        if imlayer.name == "data3d" or imlayer.name == "data3d memmap":
+                            zprojs = imlayer.metadata['point_zprojections'][layer.name]
+                            for i in range(n_points):
+                                point = layer.data[i]
+                                if pointMask.shape == (1,1):
+                                    row, col = np.round(point).astype(int)
+                                    zproj = imlayer.data[:,row,col]
+                                    assert(np.all(zprojs[i] == zproj))
+                                else:
+                                    zproj = zprojectPointInImageStack(imlayer.data, point, pointMask=pointMask)
+                                    assert(np.allclose(zprojs[i], zproj))
     
     def printLayerMetadataStructure(self):
         for layer in self.viewer.layers:
