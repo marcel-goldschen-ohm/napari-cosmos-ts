@@ -33,6 +33,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         Image layer.metadata
             ['image_file_abspath'] = "abs/path/to/image/"
+            ['subimage_slice'] = [ndim x 2] start:stop or [ndim x 3] start:stop:step slice
             ['point_zprojections']
                 [points-layer-name] = [NxT] zprojections for points-layer-name
         
@@ -45,6 +46,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             ['point_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
+        - test subimage_slice metadata
         - support per frame point positions (point tracking)
         - z-projection tag filter custom AND, OR grouping
     """
@@ -264,14 +266,19 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.addTab(tab, title)
     
     def addImageProcessingTab(self, title="Image"):
-        self.splitImageRegionsButton = QPushButton("Split Image")
-        self.splitImageRegionsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.splitImageLayer))
+        self.splitImageButton = QPushButton("Split Image")
+        self.splitImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.splitImageLayer))
 
         self.splitImageRegions = QComboBox()
         self.splitImageRegions.addItem("Top/Bottom")
         self.splitImageRegions.addItem("Left/Right")
         self.splitImageRegions.addItem("Quad")
         self.splitImageRegions.setCurrentText("Top/Bottom")
+
+        self.cropImageButton = QPushButton("Crop Image")
+        self.cropImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.cropImageLayer))
+
+        self.cropImageSlice = QLineEdit()
 
         self.zprojectImageButton = QPushButton("Z-Project Image")
         self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
@@ -316,9 +323,17 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
-        form.addRow(self.splitImageRegionsButton)
-        form.addRow("Split Regions", self.splitImageRegions)
+        form.addRow(self.splitImageButton)
+        form.addRow("Regions", self.splitImageRegions)
         grid.addWidget(group, 0, 0)
+
+        group = QGroupBox()
+        form = QFormLayout(group)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
+        form.addRow(self.cropImageButton)
+        form.addRow("start:stop,...", self.cropImageSlice)
+        grid.addWidget(group, 1, 0)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -327,7 +342,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.addRow(self.zprojectImageButton)
         form.addRow("Project", self.zprojectOperation)
         form.addRow("Z-start:stop:step", self.zprojectImageFrames)
-        grid.addWidget(group, 1, 0)
+        grid.addWidget(group, 2, 0)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -335,7 +350,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setSpacing(5)
         form.addRow(self.gaussianFilterButton)
         form.addRow("Sigma", self.gaussianSigmaSpinBox)
-        grid.addWidget(group, 2, 0)
+        grid.addWidget(group, 3, 0)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -343,7 +358,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setSpacing(5)
         form.addRow(self.tophatFilterButton)
         form.addRow("Disk Radius", self.tophatDiskRadiusSpinBox)
-        grid.addWidget(group, 3, 0)
+        grid.addWidget(group, 4, 0)
 
         vbox.addLayout(grid)
         vbox.addStretch()
@@ -533,11 +548,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             layerDict['metadata'] = {}
             if self.isImageLayer(layer):
                 # image layer
-                imageAbsPath = None
-                if layer.source.path is not None:
-                    imageAbsPath = os.path.abspath(layer.source.path)
-                elif 'image_file_abspath' in layer.metadata:
-                    imageAbsPath = os.path.abspath(layer.metadata['image_file_abspath'])
+                imageAbsPath = self.getImageLayerAbsFilePath(layer)
                 if imageAbsPath is not None:
                     imageRelPath = os.path.relpath(imageAbsPath, start=sessionAbsDir)
                     layerDict['metadata']['image_file_abspath'] = imageAbsPath
@@ -653,15 +664,50 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                             if imageAbsPath is not None:
                                 layer.metadata['image_file_abspath'] = imageAbsPath
                         elif imageAbsPath is not None:
+                            subimage_slice = None
+                            if ('metadata' in layerDict) and ('subimage_slice' in layerDict['metadata']):
+                                subimage_slice = layerDict['metadata']['subimage_slice']
+                                if subimage_slice.shape[1] == 2:
+                                    subimage_slice = np.hstack([
+                                        subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
+                                    ])
+                                starts = subimage_slice[:,0]
+                                stops = subimage_slice[:,1]
+                                steps = subimage_slice[:,2]
                             try:
                                 image = tifffile.memmap(imageAbsPath)
+                                if subimage_slice is not None:
+                                    if len(starts) == 1:
+                                        # frame crop
+                                        image = image[starts[0]:stops[0]:steps[0]]
+                                    elif len(starts) == 2:
+                                        # row,col crop
+                                        image = image[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+                                    else:
+                                        # frame,...,row,col crop
+                                        indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+                                        image = image[indexer]
                                 layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
                                     contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
                                 layer.metadata['image_file_abspath'] = imageAbsPath
+                                if subimage_slice is not None:
+                                    layer.metadata['subimage_slice'] = subimage_slice
                             except:
                                 try:
                                     layer = self.viewer.open(path=imageAbsPath, layer_type="image")[0]
                                     layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
+                                    if subimage_slice is not None:
+                                        if len(starts) == 1:
+                                            # frame crop
+                                            layer.data = layer.data[starts[0]:stops[0]:steps[0]]
+                                        elif len(starts) == 2:
+                                            # row,col crop
+                                            layer.data = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+                                        else:
+                                            # frame,...,row,col crop
+                                            indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+                                            layer.data = layer.data[indexer]
+                                        layer.metadata['subimage_slice'] = subimage_slice
                                 except:
                                     msg = QMessageBox(self)
                                     msg.setIcon(QMessageBox.Warning)
@@ -675,6 +721,16 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                 continue
                             layer.metadata[key] = layerDict['metadata'][key]
 
+    def getImageLayerAbsFilePath(self, layer):
+        if not self.isImageLayer(layer):
+            return None
+        imageAbsPath = None
+        if layer.source.path is not None:
+            imageAbsPath = os.path.abspath(layer.source.path)
+        elif 'image_file_abspath' in layer.metadata:
+            imageAbsPath = os.path.abspath(layer.metadata['image_file_abspath'])
+        return imageAbsPath
+    
     def openTIFF(self, filename=None, memorymap=True):
         """ Open TIFF image file.
 
@@ -1362,47 +1418,200 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     def splitImageLayer(self, layer, regions=None):
         if not self.isImageLayer(layer):
             return
+        bounds = np.hstack([
+            np.zeros([len(layer.data.shape),1], dtype=int), 
+            np.array(layer.data.shape, dtype=int).reshape([-1,1])
+            ])
+        imageAbsPath = self.getImageLayerAbsFilePath(layer)
+        if imageAbsPath is not None:
+            if 'subimage_slice' in layer.metadata:
+                subimage_slice = layer.metadata['subimage_slice'].copy()
+            else:
+                subimage_slice = bounds.copy()
         tform = self.worldToLayerTransform3x3(layer)
         if regions is None:
             regions = self.splitImageRegions.currentText()
         if regions == "Top/Bottom":
             n_rows = layer.data.shape[-2]
             row = int(n_rows / 2)
-            top = layer.data[...,:row,:].copy()
-            bottom = layer.data[...,-row:,:].copy()
+            top = layer.data[...,:row,:]
+            bottom = layer.data[...,-row:,:]
             name = layer.name + " bottom"
             bottom_layer = self.viewer.add_image(bottom, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                bottom_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                startstop[-2] = [rowstop - row, rowstop]
+                bottom_layer.metadata['subimage_slice'] = startstop
             name = layer.name + " top"
             top_layer = self.viewer.add_image(top, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                top_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                startstop[-2] = [rowstart, rowstart + row]
+                top_layer.metadata['subimage_slice'] = startstop
             return top_layer, bottom_layer
         elif regions == "Left/Right":
             n_cols = layer.data.shape[-1]
             col = int(n_cols / 2)
-            left = layer.data[...,:,:col].copy()
-            right = layer.data[...,:,-col:].copy()
+            left = layer.data[...,:,:col]
+            right = layer.data[...,:,-col:]
             name = layer.name + " right"
             right_layer = self.viewer.add_image(right, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                right_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                colstart, colstop = startstop[-1]
+                startstop[-1] = [colstop - col, colstop]
+                right_layer.metadata['subimage_slice'] = startstop
             name = layer.name + " left"
             left_layer = self.viewer.add_image(left, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                left_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                colstart, colstop = startstop[-1]
+                startstop[-1] = [colstart, colstart + col]
+                left_layer.metadata['subimage_slice'] = startstop
             return left_layer, right_layer
         elif regions == "Quad":
             n_rows = layer.data.shape[-2]
             n_cols = layer.data.shape[-1]
             row = int(n_rows / 2)
             col = int(n_cols / 2)
-            topleft = layer.data[...,:row,:col].copy()
-            topright = layer.data[...,:row,-col:].copy()
-            bottomleft = layer.data[...,-row:,:col].copy()
-            bottomright = layer.data[...,-row:,-col:].copy()
+            topleft = layer.data[...,:row,:col]
+            topright = layer.data[...,:row,-col:]
+            bottomleft = layer.data[...,-row:,:col]
+            bottomright = layer.data[...,-row:,-col:]
             name = layer.name + " bottomright"
             bottomright_layer = self.viewer.add_image(bottomright, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                bottomright_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                colstart, colstop = startstop[-1]
+                startstop[-2] = [rowstop - row, rowstop]
+                startstop[-1] = [colstop - col, colstop]
+                bottomright_layer.metadata['subimage_slice'] = startstop
             name = layer.name + " bottomleft"
             bottomleft_layer = self.viewer.add_image(bottomleft, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                bottomleft_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                colstart, colstop = startstop[-1]
+                startstop[-2] = [rowstop - row, rowstop]
+                startstop[-1] = [colstart, colstart + col]
+                bottomleft_layer.metadata['subimage_slice'] = startstop
             name = layer.name + " topright"
             topright_layer = self.viewer.add_image(topright, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                topright_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                colstart, colstop = startstop[-1]
+                startstop[-2] = [rowstart, rowstart + row]
+                startstop[-1] = [colstop - col, colstop]
+                topright_layer.metadata['subimage_slice'] = startstop
             name = layer.name + " topleft"
             topleft_layer = self.viewer.add_image(topleft, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            if imageAbsPath is not None:
+                topleft_layer.metadata['image_file_abspath'] = imageAbsPath
+                startstop = subimage_slice.copy()
+                rowstart, rowstop = startstop[-2]
+                colstart, colstop = startstop[-1]
+                startstop[-2] = [rowstart, rowstart + row]
+                startstop[-1] = [colstart, colstart + col]
+                topleft_layer.metadata['subimage_slice'] = startstop
             return topleft_layer, topright_layer, bottomleft_layer, bottomright_layer
+    
+    def cropImageLayer(self, layer, cropSlice=None):
+        if not self.isImageStackLayer(layer):
+            return
+        bounds = np.hstack([
+            np.zeros([len(layer.data.shape),1], dtype=int), 
+            np.array(layer.data.shape, dtype=int).reshape([-1,1])
+            ])
+        if cropSlice is None:
+            cropSlice = self.cropImageSlice.text().strip()
+            if cropSlice == "":
+                return
+        if type(cropSlice) is str:
+            cropSlice = [[s.strip() for s in lim.split(':')] for lim in cropSlice.strip().split(',')]
+            if len(cropSlice) == 1:
+                # frame crop
+                cropSliceDims = [0]
+            elif len(cropSlice) == 2:
+                # row,col crop
+                cropSliceDims = [-2, -1]
+            else:
+                # frame,...,row,col crop
+                cropSliceDims = list(range(len(layer.data.shape)))
+            for i in range(len(cropSlice)):
+                for j in range(len(cropSlice[i])):
+                    if cropSlice[i][j] == "":
+                        if j < 2:
+                            cropSlice[i][j] = bounds[cropSliceDims[i],j]
+                        else:
+                            cropSlice[i][j] = 1
+                    else:
+                        cropSlice[i][j] = int(cropSlice[i][j])
+                if len(cropSlice[i]) == 2:
+                    cropSlice[i].append(1)
+        # cropSlice = [starts column, stops column, steps column]
+        # e.g., startstop = [[frame start, frame stop, frame step], [row start, row stop, row step], [col start, col stop, col step]]
+        cropSlice = np.array(cropSlice, dtype=int)
+        if cropSlice.size % 2 == 0:
+            cropSlice = cropSlice.reshape([-1,2])
+            cropSlice = np.hstack([
+                cropSlice, np.ones([cropSlice.shape[0],1], dtype=int)
+            ])
+        elif cropSlice.size % 3 == 0:
+            cropSlice = cropSlice.reshape([-1,3])
+        starts = cropSlice[:,0]
+        stops = cropSlice[:,1]
+        steps = cropSlice[:,2]
+        if len(starts) == 1:
+            # frame crop
+            crop = layer.data[starts[0]:stops[0]:steps[0]]
+        elif len(starts) == 2:
+            # row,col crop
+            crop = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+        else:
+            # frame,...,row,col crop
+            indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+            crop = layer.data[indexer]
+        name = layer.name + " crop"
+        crop_layer = self.viewer.add_image(crop, name=name, affine=layer.affine, blending=layer.blending, colormap=layer.colormap)
+        imageAbsPath = self.getImageLayerAbsFilePath(layer)
+        if imageAbsPath is None:
+            return crop_layer
+        crop_layer.metadata['image_file_abspath'] = imageAbsPath
+        if 'subimage_slice' in layer.metadata:
+            subimage_slice = layer.metadata['subimage_slice'].copy()
+            if subimage_slice.shape[1] == 2:
+                subimage_slice = np.hstack([
+                    subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
+                ])
+        else:
+            subimage_slice = np.hstack([
+                bounds, np.ones([bounds.shape[0],1], dtype=int)
+            ])
+        if len(starts) == 1:
+            # frame crop
+            cropSlice[0,:2] += subimage_slice[0,0]
+            subimage_slice[0] = cropSlice
+        elif len(starts) == 2:
+            # row,col crop
+            cropSlice[-2:,:2] += subimage_slice[-2:,0].reshape([2,1])
+            subimage_slice[-2:] = cropSlice
+        else:
+            # frame,...,row,col crop
+            cropSlice[:,:2] += subimage_slice[:,0].reshape([-1,1])
+            subimage_slice = cropSlice
+        crop_layer.metadata['subimage_slice'] = subimage_slice
+        return crop_layer
     
     def gaussianFilterImageLayer(self, layer, sigma=None):
         if not self.isImageLayer(layer):
