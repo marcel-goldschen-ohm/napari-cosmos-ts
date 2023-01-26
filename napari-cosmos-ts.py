@@ -81,7 +81,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
         # unit tests
-        self.unitTests()
+        # self.unitTests()
     
     def unitTests(self):
         data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
@@ -264,6 +264,15 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.addTab(tab, title)
     
     def addImageProcessingTab(self, title="Image"):
+        self.splitImageRegionsButton = QPushButton("Split Image")
+        self.splitImageRegionsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.splitImageLayer))
+
+        self.splitImageRegions = QComboBox()
+        self.splitImageRegions.addItem("Top/Bottom")
+        self.splitImageRegions.addItem("Left/Right")
+        self.splitImageRegions.addItem("Quad")
+        self.splitImageRegions.setCurrentText("Top/Bottom")
+
         self.zprojectImageButton = QPushButton("Z-Project Image")
         self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
 
@@ -307,10 +316,18 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
+        form.addRow(self.splitImageRegionsButton)
+        form.addRow("Split Regions", self.splitImageRegions)
+        grid.addWidget(group, 0, 0)
+
+        group = QGroupBox()
+        form = QFormLayout(group)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
         form.addRow(self.zprojectImageButton)
         form.addRow("Project", self.zprojectOperation)
         form.addRow("Z-start:stop:step", self.zprojectImageFrames)
-        grid.addWidget(group, 0, 0)
+        grid.addWidget(group, 1, 0)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -318,7 +335,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setSpacing(5)
         form.addRow(self.gaussianFilterButton)
         form.addRow("Sigma", self.gaussianSigmaSpinBox)
-        grid.addWidget(group, 1, 0)
+        grid.addWidget(group, 2, 0)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -326,7 +343,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setSpacing(5)
         form.addRow(self.tophatFilterButton)
         form.addRow("Disk Radius", self.tophatDiskRadiusSpinBox)
-        grid.addWidget(group, 2, 0)
+        grid.addWidget(group, 3, 0)
 
         vbox.addLayout(grid)
         vbox.addStretch()
@@ -1341,6 +1358,51 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         name = layer.name + f" {method}-proj"
         tform = self.worldToLayerTransform3x3(layer)
         return self.viewer.add_image(projected, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+    
+    def splitImageLayer(self, layer, regions=None):
+        if not self.isImageLayer(layer):
+            return
+        tform = self.worldToLayerTransform3x3(layer)
+        if regions is None:
+            regions = self.splitImageRegions.currentText()
+        if regions == "Top/Bottom":
+            n_rows = layer.data.shape[-2]
+            row = int(n_rows / 2)
+            top = layer.data[...,:row,:].copy()
+            bottom = layer.data[...,-row:,:].copy()
+            name = layer.name + " bottom"
+            bottom_layer = self.viewer.add_image(bottom, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            name = layer.name + " top"
+            top_layer = self.viewer.add_image(top, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            return top_layer, bottom_layer
+        elif regions == "Left/Right":
+            n_cols = layer.data.shape[-1]
+            col = int(n_cols / 2)
+            left = layer.data[...,:,:col].copy()
+            right = layer.data[...,:,-col:].copy()
+            name = layer.name + " right"
+            right_layer = self.viewer.add_image(right, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            name = layer.name + " left"
+            left_layer = self.viewer.add_image(left, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            return left_layer, right_layer
+        elif regions == "Quad":
+            n_rows = layer.data.shape[-2]
+            n_cols = layer.data.shape[-1]
+            row = int(n_rows / 2)
+            col = int(n_cols / 2)
+            topleft = layer.data[...,:row,:col].copy()
+            topright = layer.data[...,:row,-col:].copy()
+            bottomleft = layer.data[...,-row:,:col].copy()
+            bottomright = layer.data[...,-row:,-col:].copy()
+            name = layer.name + " bottomright"
+            bottomright_layer = self.viewer.add_image(bottomright, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            name = layer.name + " bottomleft"
+            bottomleft_layer = self.viewer.add_image(bottomleft, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            name = layer.name + " topright"
+            topright_layer = self.viewer.add_image(topright, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            name = layer.name + " topleft"
+            topleft_layer = self.viewer.add_image(topleft, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+            return topleft_layer, topright_layer, bottomleft_layer, bottomright_layer
     
     def gaussianFilterImageLayer(self, layer, sigma=None):
         if not self.isImageLayer(layer):
