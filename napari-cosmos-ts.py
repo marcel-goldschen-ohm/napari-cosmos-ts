@@ -46,8 +46,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             ['point_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
+        - point size does not scale during zoom on Mac! (see https://github.com/vispy/vispy/issues/2078, maybe no fix?)
         - test subimage_slice metadata
-        - support per frame point positions (point tracking)
+        - support per frame point positions (point tracking), i.e., napari.layers.Tracks
         - z-projection tag filter custom AND, OR grouping
     """
     
@@ -68,8 +69,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         # so we know if we are incrementing or decrementing the index when filtering tags.
         self.pointIndex = None
 
-        # Default point mask to use for non-point locations.
-        self.defaultPointMask = self.getPointMask([5, 5])
+        # Default point size (diameter in pixels).
+        self.defaultPointSize = 5
 
         # setup UI
         self.initUI()
@@ -84,6 +85,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         # unit tests
         # self.unitTests()
+        self.customInit()
     
     def unitTests(self):
         data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
@@ -269,30 +271,30 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.splitImageButton = QPushButton("Split Image")
         self.splitImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.splitImageLayer))
 
-        self.splitImageRegions = QComboBox()
-        self.splitImageRegions.addItem("Top/Bottom")
-        self.splitImageRegions.addItem("Left/Right")
-        self.splitImageRegions.addItem("Quad")
-        self.splitImageRegions.setCurrentText("Top/Bottom")
+        self.splitImageRegionsComboBox = QComboBox()
+        self.splitImageRegionsComboBox.addItem("Top/Bottom")
+        self.splitImageRegionsComboBox.addItem("Left/Right")
+        self.splitImageRegionsComboBox.addItem("Quad")
+        self.splitImageRegionsComboBox.setCurrentText("Top/Bottom")
 
         self.cropImageButton = QPushButton("Crop Image")
         self.cropImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.cropImageLayer))
 
-        self.cropImageSlice = QLineEdit()
+        self.cropImageSliceEdit = QLineEdit()
 
         self.zprojectImageButton = QPushButton("Z-Project Image")
         self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
 
-        self.zprojectOperation = QComboBox()
-        self.zprojectOperation.addItem("max")
-        self.zprojectOperation.addItem("min")
-        self.zprojectOperation.addItem("std")
-        self.zprojectOperation.addItem("sum")
-        self.zprojectOperation.addItem("mean")
-        self.zprojectOperation.addItem("median")
-        self.zprojectOperation.setCurrentText("mean")
+        self.zprojectOperationComboBox = QComboBox()
+        self.zprojectOperationComboBox.addItem("max")
+        self.zprojectOperationComboBox.addItem("min")
+        self.zprojectOperationComboBox.addItem("std")
+        self.zprojectOperationComboBox.addItem("sum")
+        self.zprojectOperationComboBox.addItem("mean")
+        self.zprojectOperationComboBox.addItem("median")
+        self.zprojectOperationComboBox.setCurrentText("mean")
 
-        self.zprojectImageFrames = QLineEdit()
+        self.zprojectImageFramesEdit = QLineEdit()
 
         self.gaussianFilterButton = QPushButton("Gaussian Filter")
         self.gaussianFilterButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.gaussianFilterImageLayer))
@@ -324,7 +326,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.splitImageButton)
-        form.addRow("Regions", self.splitImageRegions)
+        form.addRow("Regions", self.splitImageRegionsComboBox)
         grid.addWidget(group, 0, 0)
 
         group = QGroupBox()
@@ -332,7 +334,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.cropImageButton)
-        form.addRow("start:stop,...", self.cropImageSlice)
+        form.addRow("start:stop,...", self.cropImageSliceEdit)
         grid.addWidget(group, 1, 0)
 
         group = QGroupBox()
@@ -340,8 +342,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.zprojectImageButton)
-        form.addRow("Project", self.zprojectOperation)
-        form.addRow("Z-start:stop:step", self.zprojectImageFrames)
+        form.addRow("Project", self.zprojectOperationComboBox)
+        form.addRow("Z-start:stop:step", self.zprojectImageFramesEdit)
         grid.addWidget(group, 2, 0)
 
         group = QGroupBox()
@@ -365,14 +367,14 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.addTab(tab, title)
     
     def addLayerRegistrationTab(self, title="Align"):
-        self.fixedLayerSelector = QComboBox()
-        self.movingLayerSelector = QComboBox()
+        self.fixedLayerComboBox = QComboBox()
+        self.movingLayerComboBox = QComboBox()
 
-        self.layerTransformSelector = QComboBox()
-        self.layerTransformSelector.addItem("Translation")
-        self.layerTransformSelector.addItem("Rigid Body")
-        self.layerTransformSelector.addItem("Affine")
-        self.layerTransformSelector.setCurrentText("Affine")
+        self.layerRegTransformTypeComboBox = QComboBox()
+        self.layerRegTransformTypeComboBox.addItem("Translation")
+        self.layerRegTransformTypeComboBox.addItem("Rigid Body")
+        self.layerRegTransformTypeComboBox.addItem("Affine")
+        self.layerRegTransformTypeComboBox.setCurrentText("Affine")
 
         self.registerLayersButton = QPushButton("Register Layers")
         self.registerLayersButton.clicked.connect(lambda x: self.registerLayers())
@@ -399,9 +401,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setSpacing(5)
         form.addRow(self.registerLayersButton)
-        form.addRow("Fixed Layer", self.fixedLayerSelector)
-        form.addRow("Moving Layer", self.movingLayerSelector)
-        form.addRow("Transform", self.layerTransformSelector)
+        form.addRow("Fixed Layer", self.fixedLayerComboBox)
+        form.addRow("Moving Layer", self.movingLayerComboBox)
+        form.addRow("Transform", self.layerRegTransformTypeComboBox)
         vbox.addWidget(group)
 
         vbox.addWidget(self.copyLayerTransformButton)
@@ -411,42 +413,41 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.addTab(tab, title)
     
     def addPointsTab(self, title="Points"):
-        self.findPointsButton = QPushButton("Find peaks in all selected image layers")
-        self.findPointsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.findPeaksInImageLayer))
+        self.findPeakPointsButton = QPushButton("Find peaks in all selected image layers")
+        self.findPeakPointsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.findPeaksInImageLayer))
 
         self.minPeakHeightSpinBox = QDoubleSpinBox()
         self.minPeakHeightSpinBox.setMaximum(65000)
         self.minPeakHeightSpinBox.setValue(10)
 
         self.minPeakSeparationSpinBox = QDoubleSpinBox()
-        self.minPeakSeparationSpinBox.setValue(self.defaultPointMask.shape[0])
+        self.minPeakSeparationSpinBox.setValue(self.defaultPointSize)
 
-        self.pointsSizeButton = QPushButton("Set point size for all selected points layers")
-        self.pointsSizeButton.clicked.connect(lambda x: self.setSelectedPointsLayersPointSize())
+        self.setPointSizeButton = QPushButton("Set point size for all selected points layers")
+        self.setPointSizeButton.clicked.connect(lambda x: self.setSelectedPointsLayersPointSize())
 
-        self.pointsEdgeWidthButton = QPushButton("Set edge width for all selected points layers")
-        self.pointsEdgeWidthButton.clicked.connect(lambda x: self.setSelectedPointsLayersEdgeWidth())
+        self.setPointEdgeWidthButton = QPushButton("Set edge width for all selected points layers")
+        self.setPointEdgeWidthButton.clicked.connect(lambda x: self.setSelectedPointsLayersEdgeWidth())
 
-        self.zprojectAllPointsButton = QPushButton("Compute point z-projections for all selected points layers")
-        self.zprojectAllPointsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectPointsLayer))
+        self.zprojectPointsLayerButton = QPushButton("Compute point z-projections for all selected points layers")
+        self.zprojectPointsLayerButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectPointsLayer))
 
         self.findColocalizedPointsButton = QPushButton("Find colocalized points")
         self.findColocalizedPointsButton.clicked.connect(self.findColocalizedPoints)
 
-        self.pointsColocalizationLayerSelectionBox = QComboBox()
-        self.pointsColocalizationLayerSelectionBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-        self.neighborsColocalizationLayerSelectionBox = QComboBox()
-        self.neighborsColocalizationLayerSelectionBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
+        self.colocPointsLayerComboBox = QComboBox()
+        self.colocPointsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
+        self.colocNeighborsLayerComboBox = QComboBox()
+        self.colocNeighborsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
 
-        self.nearestNeighborDistanceCutoffSpinBox = QDoubleSpinBox()
-        self.nearestNeighborDistanceCutoffSpinBox.setValue(self.defaultPointMask.shape[0] / 2)
+        self.colocNearestNeighborCutoffSpinBox = QDoubleSpinBox()
+        self.colocNearestNeighborCutoffSpinBox.setValue(self.defaultPointSize / 2)
 
         self.colocalizationPlot = self.newPlot()
         self.colocalizationPlot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
         legend = pg.LegendItem()
         legend.setParentItem(self.colocalizationPlot.getPlotItem())
         legend.anchor((1,0), (1,0))
-        # self.colocalizationPlot.addLegend()
         self.withinLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80), name="within layers")
         self.betweenLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80), name="between layers")
         self.colocalizationPlot.addItem(self.withinLayersNearestNeighborsHistogram)
@@ -462,23 +463,23 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         group = QGroupBox()
         form = QFormLayout(group)
         form.setSpacing(5)
-        form.addRow(self.findPointsButton)
+        form.addRow(self.findPeakPointsButton)
         form.addRow("Min Peak Height", self.minPeakHeightSpinBox)
         form.addRow("Min Separation", self.minPeakSeparationSpinBox)
         vbox.addWidget(group)
 
-        vbox.addWidget(self.pointsSizeButton)
-        vbox.addWidget(self.pointsEdgeWidthButton)
-        vbox.addWidget(self.zprojectAllPointsButton)
+        vbox.addWidget(self.setPointSizeButton)
+        vbox.addWidget(self.setPointEdgeWidthButton)
+        vbox.addWidget(self.zprojectPointsLayerButton)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setSpacing(5)
         form.addRow(self.findColocalizedPointsButton)
-        form.addRow("Points Layer", self.pointsColocalizationLayerSelectionBox)
-        form.addRow("Neighbors Layer", self.neighborsColocalizationLayerSelectionBox)
-        form.addRow("Nearest Neighbor Distance Cutoff", self.nearestNeighborDistanceCutoffSpinBox)
+        form.addRow("Points Layer", self.colocPointsLayerComboBox)
+        form.addRow("Neighbors Layer", self.colocNeighborsLayerComboBox)
+        form.addRow("Nearest Neighbor Distance Cutoff", self.colocNearestNeighborCutoffSpinBox)
         form.addRow(self.colocalizationPlot)
         vbox.addWidget(group)
 
@@ -486,43 +487,46 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.addTab(tab, title)
     
     def addPointZProjectionsTab(self, title="Point Z-Projections"):
-        self.pointZProjPlotLayout = QVBoxLayout()
-        self.pointZProjPlotLayout.setSpacing(0)
+        self.zprojPlotLayout = QVBoxLayout()
+        self.zprojPlotLayout.setSpacing(0)
 
-        self.pointsZProjLayerSelectionBox = QComboBox()
-        self.pointsZProjLayerSelectionBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
+        self.zprojPointsLayerComboBox = QComboBox()
+        self.zprojPointsLayerComboBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
 
-        self.pointIndexSpinBox = QSpinBox()
-        self.pointIndexSpinBox.setMaximum(65000)
-        self.pointIndexSpinBox.setKeyboardTracking(False)
-        self.pointIndexSpinBox.valueChanged.connect(lambda x: self.setSelectedPointIndex())
+        self.zprojPointIndexSpinBox = QSpinBox()
+        self.zprojPointIndexSpinBox.setMaximum(65000)
+        self.zprojPointIndexSpinBox.setKeyboardTracking(False)
+        self.zprojPointIndexSpinBox.valueChanged.connect(lambda x: self.setSelectedPointIndex())
 
-        self.pointZProjectionsWorldPositionText = QLabel()
-        self.numPointsText = QLabel()
+        self.zprojPointWorldPositionLabel = QLabel()
+        self.zprojNumPointsLabel = QLabel()
 
-        self.pointTagsEdit = QLineEdit()
-        self.pointTagsEdit.editingFinished.connect(self.updateSelectedPointTags)
+        self.zprojPointTagsEdit = QLineEdit()
+        self.zprojPointTagsEdit.editingFinished.connect(self.updateSelectedPointTags)
 
-        self.pointTagFilterEdit = QLineEdit()
-        self.pointTagFilterCBox = QCheckBox("Filter")
+        self.zprojPointTagFilterEdit = QLineEdit()
+        self.zprojPointTagFilterCheckBox = QCheckBox("Filter")
+
+        self.zprojNoVisibleImageStacksLabel = QLabel("No visible image stacks.")
 
         grid = QGridLayout()
         grid.setSpacing(5)
         grid.addWidget(QLabel("Points Layer"), 0, 0, Qt.AlignRight)
-        grid.addWidget(self.pointsZProjLayerSelectionBox, 0, 1)
-        grid.addWidget(self.numPointsText, 0, 2)
-        grid.addWidget(self.pointTagFilterCBox, 0, 3)
-        grid.addWidget(self.pointTagFilterEdit, 0, 4)
+        grid.addWidget(self.zprojPointsLayerComboBox, 0, 1)
+        grid.addWidget(self.zprojNumPointsLabel, 0, 2)
+        grid.addWidget(self.zprojPointTagFilterCheckBox, 0, 3)
+        grid.addWidget(self.zprojPointTagFilterEdit, 0, 4)
         grid.addWidget(QLabel("Point Index"), 1, 0, Qt.AlignRight)
-        grid.addWidget(self.pointIndexSpinBox, 1, 1)
-        grid.addWidget(self.pointZProjectionsWorldPositionText, 1, 2)
+        grid.addWidget(self.zprojPointIndexSpinBox, 1, 1)
+        grid.addWidget(self.zprojPointWorldPositionLabel, 1, 2)
         grid.addWidget(QLabel("Tags"), 1, 3, Qt.AlignRight)
-        grid.addWidget(self.pointTagsEdit, 1, 4)
+        grid.addWidget(self.zprojPointTagsEdit, 1, 4)
 
         tab = QWidget()
         vbox = QVBoxLayout(tab)
         vbox.addLayout(grid)
-        vbox.addLayout(self.pointZProjPlotLayout)
+        vbox.addLayout(self.zprojPlotLayout)
+        vbox.addWidget(self.zprojNoVisibleImageStacksLabel)
         self.addTab(tab, title)
     
     def exportSession(self, filename=None, writeImageStackData=False):
@@ -830,8 +834,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             layerMetadata['point_zprojection_plot_vline'] = plot_vline
             # insert plot into layout
             plotIndex = self.imageStackLayers().index(layer)
-            self.pointZProjPlotLayout.insertWidget(plotIndex, plot)
-            self.pointZProjPlotLayout.setStretch(plotIndex, 1)
+            self.zprojPlotLayout.insertWidget(plotIndex, plot)
+            self.zprojPlotLayout.setStretch(plotIndex, 1)
+            self.zprojNoVisibleImageStacksLabel.hide()
         elif self.isPointsLayer(layer):
             n_points = len(layer.data)
             # tags string feature for each point
@@ -849,7 +854,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if 'point_zprojection_plot' in layerMetadata:
             # delete plot
             plot = layerMetadata['point_zprojection_plot']
-            self.pointZProjPlotLayout.removeWidget(plot)
+            self.zprojPlotLayout.removeWidget(plot)
             plot.deleteLater()
             # reset plot linkage
             self.linkPointZProjectionPlots()
@@ -860,6 +865,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 if 'point_zprojections' in imlayer.metadata:
                     if layer.name in imlayer.metadata['point_zprojections']:
                         del imlayer.metadata['point_zprojections'][layer.name]
+        else:
+            visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
+            if len(visibleImageStackLayers) == 0:
+                self.zprojNoVisibleImageStacksLabel.show()
         self.updateLayerSelectionBoxes()
     
     def onLayerMoved(self, event):
@@ -870,10 +879,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if 'point_zprojection_plot' in layerMetadata:
             # reposition plot to match layer order
             plot = layerMetadata['point_zprojection_plot']
-            self.pointZProjPlotLayout.removeWidget(plot)
+            self.zprojPlotLayout.removeWidget(plot)
             plotIndex = self.pointZProjectionPlots().index(plot)
-            self.pointZProjPlotLayout.insertWidget(plotIndex, plot)
-            self.pointZProjPlotLayout.setStretch(plotIndex, 1)
+            self.zprojPlotLayout.insertWidget(plotIndex, plot)
+            self.zprojPlotLayout.setStretch(plotIndex, 1)
         self.updateLayerSelectionBoxes()
     
     def onLayerNameChanged(self, event):
@@ -905,6 +914,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             # show/hide plot along with layer
             plot = layerMetadata['point_zprojection_plot']
             plot.setVisible(layer.visible)
+        visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
+        if len(visibleImageStackLayers) == 0:
+            self.zprojNoVisibleImageStacksLabel.show()
+        else:
+            self.zprojNoVisibleImageStacksLabel.hide()
     
     def onDimStepChanged(self, event):
         try:
@@ -930,6 +944,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 for layer in visiblePointsLayers:
                     if layer.data.size == 0:
                         continue
+                    # Find closest point to mouse click.
+                    # If within point, then select the point.
                     worldPoints = self.transformPointsFromLayerToWorld(layer.data, layer)
                     squareDists = np.sum((worldPoints - worldPoint)**2, axis=1)
                     index = np.argmin(squareDists)
@@ -938,63 +954,64 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                         self.setSelectedPointIndex(index, layer)
                         return
             # no point selected
-            self.pointIndexSpinBox.clear()
-            self.pointTagsEdit.setText("")
+            self.zprojPointIndexSpinBox.clear()
+            self.zprojPointTagsEdit.setText("")
             for layer in self.pointsLayers():
                 layer._selected_data = set()
                 layer._highlight_index = []
                 layer.events.highlight()
-            # z-project clicked location
-            self.zprojectWorldPoint(worldPoint, pointMask=self.defaultPointMask)
+            # z-project clicked location (use default point size)
+            pointMask = self.getPointMask(self.defaultPointSize)
+            self.zprojectWorldPoint(worldPoint, pointMask=pointMask)
     
     def onMouseDoubleClicked(self, viewer, event):
         self.viewer.reset_view()
     
     def updateLayerSelectionBoxes(self):
         # layer registration
-        fixedLayerName = self.fixedLayerSelector.currentText()
-        movingLayerName = self.movingLayerSelector.currentText()
-        self.fixedLayerSelector.clear()
-        self.movingLayerSelector.clear()
+        fixedLayerName = self.fixedLayerComboBox.currentText()
+        movingLayerName = self.movingLayerComboBox.currentText()
+        self.fixedLayerComboBox.clear()
+        self.movingLayerComboBox.clear()
         for layer in reversed(self.viewer.layers):
-            self.fixedLayerSelector.addItem(layer.name)
-            self.movingLayerSelector.addItem(layer.name)
-        self.fixedLayerSelector.setCurrentText(fixedLayerName)
-        self.movingLayerSelector.setCurrentText(movingLayerName)
+            self.fixedLayerComboBox.addItem(layer.name)
+            self.movingLayerComboBox.addItem(layer.name)
+        self.fixedLayerComboBox.setCurrentText(fixedLayerName)
+        self.movingLayerComboBox.setCurrentText(movingLayerName)
         # layer point colocalization
-        self.pointsColocalizationLayerSelectionBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
-        self.neighborsColocalizationLayerSelectionBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
-        pointsLayerName = self.pointsColocalizationLayerSelectionBox.currentText()
-        neighborsLayerName = self.neighborsColocalizationLayerSelectionBox.currentText()
-        self.pointsColocalizationLayerSelectionBox.clear()
-        self.neighborsColocalizationLayerSelectionBox.clear()
+        self.colocPointsLayerComboBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
+        self.colocNeighborsLayerComboBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
+        pointsLayerName = self.colocPointsLayerComboBox.currentText()
+        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
+        self.colocPointsLayerComboBox.clear()
+        self.colocNeighborsLayerComboBox.clear()
         for layer in self.pointsLayers():
-            self.pointsColocalizationLayerSelectionBox.addItem(layer.name)
-            self.neighborsColocalizationLayerSelectionBox.addItem(layer.name)
-        self.pointsColocalizationLayerSelectionBox.setCurrentText(pointsLayerName)
-        self.neighborsColocalizationLayerSelectionBox.setCurrentText(neighborsLayerName)
-        self.pointsColocalizationLayerSelectionBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-        self.neighborsColocalizationLayerSelectionBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
+            self.colocPointsLayerComboBox.addItem(layer.name)
+            self.colocNeighborsLayerComboBox.addItem(layer.name)
+        self.colocPointsLayerComboBox.setCurrentText(pointsLayerName)
+        self.colocNeighborsLayerComboBox.setCurrentText(neighborsLayerName)
+        self.colocPointsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
+        self.colocNeighborsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
         self.updatePointsColocalizationPlot()
         # layer point z-projections
-        self.pointsZProjLayerSelectionBox.currentTextChanged.disconnect()
-        pointsLayerName = self.pointsZProjLayerSelectionBox.currentText()
-        self.pointsZProjLayerSelectionBox.clear()
+        self.zprojPointsLayerComboBox.currentTextChanged.disconnect()
+        pointsLayerName = self.zprojPointsLayerComboBox.currentText()
+        self.zprojPointsLayerComboBox.clear()
         for layer in self.pointsLayers():
-            self.pointsZProjLayerSelectionBox.addItem(layer.name)
-        self.pointsZProjLayerSelectionBox.setCurrentText(pointsLayerName)
-        self.pointsZProjLayerSelectionBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
+            self.zprojPointsLayerComboBox.addItem(layer.name)
+        self.zprojPointsLayerComboBox.setCurrentText(pointsLayerName)
+        self.zprojPointsLayerComboBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
         self.setActivePointsLayer()
     
     def registerLayers(self, fixedLayer=None, movingLayer=None, transformType=None):
         if fixedLayer is None:
-            fixedLayerName = self.fixedLayerSelector.currentText()
+            fixedLayerName = self.fixedLayerComboBox.currentText()
             fixedLayer = self.viewer.layers[fixedLayerName]
         if movingLayer is None:
-            movingLayerName = self.movingLayerSelector.currentText()
+            movingLayerName = self.movingLayerComboBox.currentText()
             movingLayer = self.viewer.layers[movingLayerName]
         if transformType is None:
-            transformType = self.layerTransformSelector.currentText()
+            transformType = self.layerRegTransformTypeComboBox.currentText()
         if fixedLayer is movingLayer:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
@@ -1009,7 +1026,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         else:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
-            msg.setText("Registering image with points layers not implemented.")
+            msg.setText("Only image-image or points-points layer registration implemented.")
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
     
@@ -1092,30 +1109,24 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         return layer.affine.affine_matrix[-3:,-3:]
     
     def transformPointsFromLayerToWorld(self, points, layer):
-        points = np.array(points)
-        if points.ndim == 1:
-            points = np.reshape(points, [1, -1])
-        n_points = len(points)
-        worldPoints = np.zeros((n_points, 2))
+        points = np.array(points).reshape([-1, 2])
+        worldPoints = np.zeros(points.shape)
         for i, point in enumerate(points):
-            if layer.ndim == 2:
-                worldPoints[i] = layer.data_to_world(point)
-            elif layer.ndim == 3:
-                worldPoints[i] = layer.data_to_world((0, *point))[-2:]
+            if layer.ndim > 2:
+                # add first index (0) of preceding dimensions (e.g., frames)
+                point = tuple([0]*(layer.ndim - 2) + [*point])
+            worldPoints[i] = layer.data_to_world(point)[-2:]
         return worldPoints
 
-    def transformPointsFromWorldToLayer(self, points, layer):
-        points = np.array(points)
-        if points.ndim == 1:
-            points = np.reshape(points, [1, -1])
-        n_points = len(points)
-        layerPoints = np.zeros((n_points, 2))
-        for i, point in enumerate(points):
-            if layer.ndim == 2:
-                layerPoints[i] = layer.world_to_data(point)
-            elif layer.ndim == 3:
-                layerPoints[i] = layer.world_to_data((0, *point))[-2:]
-        return layerPoints
+    def transformPointsFromWorldToLayer(self, worldPoints, layer):
+        worldPoints = np.array(worldPoints).reshape([-1, 2])
+        points = np.zeros(worldPoints.shape)
+        for i, worldPoint in enumerate(worldPoints):
+            if layer.ndim > 2:
+                # add first index (0) of preceding dimensions (e.g., frames)
+                worldPoint = tuple([0]*(layer.ndim - 2) + [*worldPoint])
+            points[i] = layer.world_to_data(worldPoint)[-2:]
+        return points
     
     def getLayerWorldBoundingBox(self, layer):
         if self.isImageLayer(layer):
@@ -1155,9 +1166,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     def activePointsLayer(self):
         if len(self.pointsLayers()) == 0:
             return None
-        if self.pointsZProjLayerSelectionBox.count() == 0:
+        if self.zprojPointsLayerComboBox.count() == 0:
             return None
-        layerName = self.pointsZProjLayerSelectionBox.currentText()
+        layerName = self.zprojPointsLayerComboBox.currentText()
         try:
             layer = self.viewer.layers[layerName]
         except KeyError:
@@ -1173,40 +1184,40 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if layer is None:
             layer = self.activePointsLayer()
         elif self.isPointsLayer(layer):
-            self.pointsZProjLayerSelectionBox.setCurrentText(layer.name)
+            self.zprojPointsLayerComboBox.setCurrentText(layer.name)
         else:
             layer = None
         if layer is not None and layer.data.size > 0:
             n_points = layer.data.shape[0]
         else:
             n_points = 0
-        self.numPointsText.setText(f"{n_points}/{n_points} Points")
+        self.zprojNumPointsLabel.setText(f"{n_points}/{n_points} Points")
         if n_points > 0 and self.selectedPointIndex() is not None:
             self.setSelectedPointIndex()
     
     def selectedPointIndex(self):
         if self.activePointsLayer() is None:
             return None
-        if self.pointIndexSpinBox.cleanText() == "":
+        if self.zprojPointIndexSpinBox.cleanText() == "":
             return None
-        return self.pointIndexSpinBox.value()
+        return self.zprojPointIndexSpinBox.value()
     
-    def setSelectedPointIndex(self, index=None, layer=None):
-        if layer is None:
-            layer = self.activePointsLayer()
+    def setSelectedPointIndex(self, index=None):
+        layer = self.activePointsLayer()
+
+        if layer is not None:
+            n_points = layer.data.shape[0]
         else:
-            self.setActivePointsLayer(layer)
-            layer = self.activePointsLayer()
-        n_points = layer.data.shape[0]
+            n_points = 0
         
         if index is None:
             index = self.selectedPointIndex()
         
         if index is None or index < 0 or layer is None or n_points == 0:
             # deselect all points
-            self.pointIndexSpinBox.clear()
-            self.pointZProjectionsWorldPositionText.setText("")
-            self.pointTagsEdit.setText("")
+            self.zprojPointIndexSpinBox.clear()
+            self.zprojPointWorldPositionLabel.setText("")
+            self.zprojPointTagsEdit.setText("")
 
             # no highlighted points
             if layer is not None:
@@ -1223,52 +1234,52 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         
         # tags filter?
         layer.features['tags'].fillna("", inplace=True)
-        if self.pointTagFilterCBox.isChecked():
+        if self.zprojPointTagFilterCheckBox.isChecked():
             index = min(max(0, index), n_points - 1)
-            filter = self.pointTagFilterEdit.text()
+            filter = self.zprojPointTagFilterEdit.text()
             if (self.pointIndex is None) or (self.pointIndex <= index):
                 # incrementing point index
                 while index < n_points:
                     tags = layer.features['tags'][index]
-                    if self.matchTagsToFilter(tags, filter):
+                    if self.checkIfTagsMatchFilter(tags, filter):
                         break
                     index += 1
                 if index == n_points:
                     # no matches found
                     if self.pointIndex is None:
-                        self.pointIndexSpinBox.clear()
+                        self.zprojPointIndexSpinBox.clear()
                     else:
-                        self.pointIndexSpinBox.setValue(self.pointIndex)
+                        self.zprojPointIndexSpinBox.setValue(self.pointIndex)
                     return
             else:
                 # decrementing point index
                 while index >= 0:
                     tags = layer.features['tags'][index]
-                    if self.matchTagsToFilter(tags, filter):
+                    if self.checkIfTagsMatchFilter(tags, filter):
                         break
                     index -= 1
                 if index < 0:
                     # no matches found
                     if self.pointIndex is None:
-                        self.pointIndexSpinBox.clear()
+                        self.zprojPointIndexSpinBox.clear()
                     else:
-                        self.pointIndexSpinBox.setValue(self.pointIndex)
+                        self.zprojPointIndexSpinBox.setValue(self.pointIndex)
                     return
 
         # select point in layer
         index = min(max(0, index), n_points - 1)
-        self.pointIndexSpinBox.setValue(index)
+        self.zprojPointIndexSpinBox.setValue(index)
         self.pointIndex = index
         try:
             tags = layer.features['tags'][index]
             try:
                 tags = tags.strip()
-                self.pointTagsEdit.setText(tags)
+                self.zprojPointTagsEdit.setText(tags)
             except AttributeError:
                 layer.features['tags'][index] = ""
-                self.pointTagsEdit.setText("")
+                self.zprojPointTagsEdit.setText("")
         except (KeyError, IndexError):
-            self.pointTagsEdit.setText("")
+            self.zprojPointTagsEdit.setText("")
         
         # highlight selected point
         layer._selected_data = set([index])
@@ -1286,13 +1297,13 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if layer is not None:
             index = self.selectedPointIndex()
             if index is not None:
-                tags = self.pointTagsEdit.text().strip()
+                tags = self.zprojPointTagsEdit.text().strip()
                 if not 'tags' in layer.features:
                     n_points = len(layer.data)
                     layer.features['tags'] = [""] * n_points
                 layer.features['tags'][index] = tags
     
-    def matchTagsToFilter(self, tags, filter):
+    def checkIfTagsMatchFilter(self, tags, filter):
         tags = [tag.strip() for tag in tags.split(",")]
         or_tags = [tag.strip() for tag in filter.split(",")]
         for or_tag in or_tags:
@@ -1303,7 +1314,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         return False
     
     def getPointMask(self, pointSize):
-        n_rows, n_cols = pointSize
+        try:
+            n_rows, n_cols = pointSize
+        except:
+            n_rows = pointSize
+            n_cols = n_rows
         rows = np.reshape(np.arange(n_rows, dtype=float), [-1, 1])
         rows -= rows.mean()
         cols = np.reshape(np.arange(n_cols, dtype=float), [1, -1])
@@ -1323,25 +1338,29 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     
     def zprojectWorldPoint(self, worldPoint, pointMask=None):
         if self.viewer.grid.enabled:
+            # find ofset of world point from origin of grid box it is within
             layerRowLims, layerColLims = self.getLayerWorldGridBoxes()
             row, col = worldPoint
-            inLayerIndex = np.where((layerRowLims[:,0] <= row) & (layerRowLims[:,1] > row) \
+            indexOfLayerContainingWorldPoint = \
+                np.where((layerRowLims[:,0] <= row) & (layerRowLims[:,1] > row) \
                 & (layerColLims[:,0] <= col) & (layerColLims[:,1] > col))[0][0]
-            gridRowOffset = row - layerRowLims[inLayerIndex,0]
-            gridColOffset = col - layerColLims[inLayerIndex,0]
+            gridRowOffset = row - layerRowLims[indexOfLayerContainingWorldPoint,0]
+            gridColOffset = col - layerColLims[indexOfLayerContainingWorldPoint,0]
         for layer in self.imageStackLayers():
+            layerIndex = list(self.viewer.layers).index(layer)
             if self.viewer.grid.enabled:
-                layerIndex = list(self.viewer.layers).index(layer)
+                # use offset from layer's grid box instead of world point
                 row = layerRowLims[layerIndex,0] + gridRowOffset
                 col = layerColLims[layerIndex,0] + gridColOffset
-                zproj = self.zprojectWorldPointInImageStackLayer(layer, (row, col), pointMask=pointMask)
+                shiftedWorldPoint = (row, col)
+                zproj = self.zprojectWorldPointInImageStackLayer(layer, shiftedWorldPoint, pointMask=pointMask)
             else:
                 zproj = self.zprojectWorldPointInImageStackLayer(layer, worldPoint, pointMask=pointMask)
             # update z-projection plot
-            layerIndex = list(self.viewer.layers).index(layer)
             self.layerMetadata[layerIndex]['point_zprojection_plot_data'].setData(zproj)
+        # show actual world point location in UI regardless of whether or not grid view is enabled
         row, col = worldPoint
-        self.pointZProjectionsWorldPositionText.setText(f"[{int(row)}, {int(col)}]")
+        self.zprojPointWorldPositionLabel.setText(f"[{int(row)}, {int(col)}]")
     
     def zprojectPointsLayer(self, layer, pointMask=None):
         if not self.isPointsLayer(layer):
@@ -1350,7 +1369,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         # transform points to world coords
         worldPoints = self.transformPointsFromLayerToWorld(layer.data, layer)
         if self.viewer.grid.enabled:
-            # remove grid shift
+            # remove grid shift to get points relative to the layer's grid origin
             layerRowLims, layerColLims = self.getLayerWorldGridBoxes()
             layerIndex = list(self.viewer.layers).index(layer)
             layerGridShift = np.array([layerRowLims[layerIndex,0], layerColLims[layerIndex,0]])
@@ -1360,7 +1379,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             n_frames = imlayer.data.shape[0]
             zprojs = np.zeros((n_points, n_frames))
             if self.viewer.grid.enabled:
-                # add grid shift
+                # add grid shift to the points that are relative to the grid origin
                 layerIndex = list(self.viewer.layers).index(layer)
                 layerGridShift = np.array([layerRowLims[layerIndex,0], layerColLims[layerIndex,0]])
                 shiftedPoints = gridPoints + layerGridShift
@@ -1387,12 +1406,12 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if not self.isImageStackLayer(layer):
             return
         if method is None:
-            method = self.zprojectOperation.currentText()
+            method = self.zprojectOperationComboBox.currentText()
         methods = {"max": np.max, "min": np.min, "std": np.std, "sum": np.sum, "mean": np.mean, "median": np.median}
         func = methods[method]
         n_frames = layer.data.shape[0]
         if frames is None:
-            framesText = self.zprojectImageFrames.text().strip()
+            framesText = self.zprojectImageFramesEdit.text().strip()
             if framesText == "":
                 frames = np.arange(n_frames)
             else:
@@ -1430,7 +1449,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 subimage_slice = bounds.copy()
         tform = self.worldToLayerTransform3x3(layer)
         if regions is None:
-            regions = self.splitImageRegions.currentText()
+            regions = self.splitImageRegionsComboBox.currentText()
         if regions == "Top/Bottom":
             n_rows = layer.data.shape[-2]
             row = int(n_rows / 2)
@@ -1534,7 +1553,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             np.array(layer.data.shape, dtype=int).reshape([-1,1])
             ])
         if cropSlice is None:
-            cropSlice = self.cropImageSlice.text().strip()
+            cropSlice = self.cropImageSliceEdit.text().strip()
             if cropSlice == "":
                 return
         if type(cropSlice) is str:
@@ -1666,7 +1685,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         tform = self.worldToLayerTransform3x3(layer)
         features = pd.DataFrame({"tags": [""] * n_points})
         return self.viewer.add_points(points, name=name, affine=tform, features=features, 
-            size=self.defaultPointMask.shape, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
+            size=self.defaultPointSize, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
             face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
     
     def visualizeColocalizationOfPointsLayers(self, pointsLayer, neighborsLayer, bins=30):
@@ -1702,8 +1721,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             self.betweenLayersNearestNeighborsHistogram.setData([0, 0], [0])
     
     def updatePointsColocalizationPlot(self):
-        pointsLayerName = self.pointsColocalizationLayerSelectionBox.currentText()
-        neighborsLayerName = self.neighborsColocalizationLayerSelectionBox.currentText()
+        pointsLayerName = self.colocPointsLayerComboBox.currentText()
+        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
         try:
             pointsLayer = self.viewer.layers[pointsLayerName]
         except KeyError:
@@ -1722,8 +1741,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
             return
-        pointsLayerName = self.pointsColocalizationLayerSelectionBox.currentText()
-        neighborsLayerName = self.neighborsColocalizationLayerSelectionBox.currentText()
+        pointsLayerName = self.colocPointsLayerComboBox.currentText()
+        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
         try:
             pointsLayer = self.viewer.layers[pointsLayerName]
         except KeyError:
@@ -1749,7 +1768,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         pointsNearestNeighborsIndexes = pdists.argmin(axis=1)
         neighborsNearestPointsIndexes = pdists.argmin(axis=0)
         colocalizedPointNeighborIndexes = []
-        cutoff = self.nearestNeighborDistanceCutoffSpinBox.value()
+        cutoff = self.colocNearestNeighborCutoffSpinBox.value()
         for i in range(len(points)):
             j = pointsNearestNeighborsIndexes[i]
             if neighborsNearestPointsIndexes[j] == i:
