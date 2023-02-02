@@ -87,7 +87,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         # testing
         # self.unitTests()
-        # self.TO_BE_REMOVED_customInit()
+        self.TO_BE_REMOVED_customInit()
 
     
     # TESTING
@@ -322,7 +322,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.zprojectImageOperationComboBox.addItem("median")
         self.zprojectImageOperationComboBox.setCurrentText("mean")
 
-        self.zprojectImageFramesEdit = QLineEdit()
+        self.zprojectImageFrameSliceEdit = QLineEdit()
 
         self.gaussianFilterButton = QPushButton("Gaussian Filter")
         self.gaussianFilterButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.gaussianFilterImageLayer))
@@ -366,8 +366,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.zprojectImageButton)
-        form.addRow("Project", self.zprojectImageOperationComboBox)
-        form.addRow("start:stop[:step]", self.zprojectImageFramesEdit)
+        form.addRow("Projection", self.zprojectImageOperationComboBox)
+        form.addRow("start:stop[:step]", self.zprojectImageFrameSliceEdit)
         vbox.addWidget(group)
 
         group = QGroupBox()
@@ -1118,26 +1118,28 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                             subimage_slice = None
                             if ('metadata' in layerDict) and ('subimage_slice' in layerDict['metadata']):
                                 subimage_slice = layerDict['metadata']['subimage_slice']
-                                if subimage_slice.shape[1] == 2:
-                                    subimage_slice = np.hstack([
-                                        subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
-                                    ])
-                                starts = subimage_slice[:,0]
-                                stops = subimage_slice[:,1]
-                                steps = subimage_slice[:,2]
+                                slices = tuple([slice(start, stop, step) for (start, stop, step) in subimage_slice])
+                                # if subimage_slice.shape[1] == 2:
+                                #     subimage_slice = np.hstack([
+                                #         subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
+                                #     ])
+                                # starts = subimage_slice[:,0]
+                                # stops = subimage_slice[:,1]
+                                # steps = subimage_slice[:,2]
                             try:
                                 image = tifffile.memmap(imageAbsPath)
                                 if subimage_slice is not None:
-                                    if len(starts) == 1:
-                                        # frame crop
-                                        image = image[starts[0]:stops[0]:steps[0]]
-                                    elif len(starts) == 2:
-                                        # row,col crop
-                                        image = image[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-                                    else:
-                                        # frame,...,row,col crop
-                                        indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-                                        image = image[indexer]
+                                    image = image[slices]
+                                    # if len(starts) == 1:
+                                    #     # frame crop
+                                    #     image = image[starts[0]:stops[0]:steps[0]]
+                                    # elif len(starts) == 2:
+                                    #     # row,col crop
+                                    #     image = image[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+                                    # else:
+                                    #     # frame,...,row,col crop
+                                    #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+                                    #     image = image[indexer]
                                 layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
                                     contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
                                 layer.metadata['image_file_abspath'] = imageAbsPath
@@ -1148,16 +1150,17 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                     layer = self.viewer.open(path=imageAbsPath, layer_type="image")[0]
                                     layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
                                     if subimage_slice is not None:
-                                        if len(starts) == 1:
-                                            # frame crop
-                                            layer.data = layer.data[starts[0]:stops[0]:steps[0]]
-                                        elif len(starts) == 2:
-                                            # row,col crop
-                                            layer.data = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-                                        else:
-                                            # frame,...,row,col crop
-                                            indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-                                            layer.data = layer.data[indexer]
+                                        layer.data = layer.data[slices]
+                                        # if len(starts) == 1:
+                                        #     # frame crop
+                                        #     layer.data = layer.data[starts[0]:stops[0]:steps[0]]
+                                        # elif len(starts) == 2:
+                                        #     # row,col crop
+                                        #     layer.data = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+                                        # else:
+                                        #     # frame,...,row,col crop
+                                        #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+                                        #     layer.data = layer.data[indexer]
                                         layer.metadata['subimage_slice'] = subimage_slice
                                 except:
                                     msg = QMessageBox(self)
@@ -1541,14 +1544,14 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 edge_width = self.roiEdgeWidthSpinBox.value()
         if edge_color is None:
             if isSelectedRoisLayer:
-                edge_color = strToRgba(self.selectedRoiEdgeColorEdit.text())
+                edge_color = str2rgba(self.selectedRoiEdgeColorEdit.text())
             else:
-                edge_color = strToRgba(self.roiEdgeColorEdit.text())
+                edge_color = str2rgba(self.roiEdgeColorEdit.text())
         if face_color is None:
             if isSelectedRoisLayer:
                 face_color = [0]*4
             else:
-                face_color = strToRgba(self.roiFaceColorEdit.text())
+                face_color = str2rgba(self.roiFaceColorEdit.text())
         if features is None:
             n_rois = len(center)
             features = pd.DataFrame({"tags": [""] * n_rois})
@@ -1581,14 +1584,14 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 edge_width = self.roiEdgeWidthSpinBox.value()
         if edge_color is None:
             if roisLayer is self._selectedRoiLayer:
-                edge_color = strToRgba(self.selectedRoiEdgeColorEdit.text())
+                edge_color = str2rgba(self.selectedRoiEdgeColorEdit.text())
             else:
-                edge_color = strToRgba(self.roiEdgeColorEdit.text())
+                edge_color = str2rgba(self.roiEdgeColorEdit.text())
         if face_color is None:
             if roisLayer is self._selectedRoiLayer:
                 face_color = [0]*4
             else:
-                face_color = strToRgba(self.roiFaceColorEdit.text())
+                face_color = str2rgba(self.roiFaceColorEdit.text())
         if shape_type == "point" and self.isShapesLayer(roisLayer):
             roisLayer = self.convertShapesLayerToPointsLayer(roisLayer)
         elif shape_type != "point" and self.isPointsLayer(roisLayer):
@@ -1633,7 +1636,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             self._selectedRoiLayer = None
             return
         roiEdgeWidth = self.selectedRoiEdgeWidthSpinBox.value()
-        roiEdgeColor = strToRgba(self.selectedRoiEdgeColorEdit.text())
+        roiEdgeColor = str2rgba(self.selectedRoiEdgeColorEdit.text())
         roiFaceColor = [0]*4
         
         # delete selected ROI layer if it is the wrong layer type
@@ -1761,8 +1764,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         roiShapeType = self.roiShapeComboBox.currentText()
         roiSize = self.roiSizeSpinBox.value()
         roiEdgeWidth = self.roiEdgeWidthSpinBox.value()
-        roiEdgeColor = strToRgba(self.roiEdgeColorEdit.text())
-        roiFaceColor = strToRgba(self.roiFaceColorEdit.text())
+        roiEdgeColor = str2rgba(self.roiEdgeColorEdit.text())
+        roiFaceColor = str2rgba(self.roiFaceColorEdit.text())
         if roiShapeType == "point":
             return self.viewer.add_points(points, name=name, affine=tform, features=features, 
                 size=roiSize, edge_width=roiEdgeWidth, edge_color=roiEdgeColor, edge_width_is_relative=False, 
@@ -1926,37 +1929,42 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     
     # IMAGE PROCESSING
     
-    def zprojectImageLayer(self, layer, method=None, frames=None):
-        if not self.isImageStackLayer(layer):
+    def zprojectImageLayer(self, layer, method=None, frameSlice=None):
+        if not self.isImageLayer(layer) or (layer.ndim <= 2):
             return
         if method is None:
             method = self.zprojectImageOperationComboBox.currentText()
         methods = {"max": np.max, "min": np.min, "std": np.std, "sum": np.sum, "mean": np.mean, "median": np.median}
         func = methods[method]
-        n_frames = layer.data.shape[0]
-        if frames is None:
-            framesText = self.zprojectImageFramesEdit.text().strip()
-            if framesText == "":
-                frames = np.arange(n_frames)
-            else:
-                slice = framesText.split(':')
-                try:
-                    start = int(slice[0])
-                except (IndexError, ValueError):
-                    start = 0
-                try:
-                    stop = int(slice[1])
-                except (IndexError, ValueError):
-                    stop = n_frames
-                try:
-                    step = int(slice[2])
-                except (IndexError, ValueError):
-                    step = 1
-                frames = np.arange(start, stop, step)
-        projected = func(layer.data[frames], axis=0)
+        if frameSlice is None:
+            frameSlice = self.zprojectImageFrameSliceEdit.text().strip()
+        if isinstance(frameSlice, str):
+            frameSlice = str2slice(frameSlice)
+        # n_frames = layer.data.shape[0]
+        # if frames is None:
+        #     framesText = self.zprojectImageFramesEdit.text().strip()
+        #     if framesText == "":
+        #         frames = np.arange(n_frames)
+        #     else:
+        #         slice = framesText.split(':')
+        #         try:
+        #             start = int(slice[0])
+        #         except (IndexError, ValueError):
+        #             start = 0
+        #         try:
+        #             stop = int(slice[1])
+        #         except (IndexError, ValueError):
+        #             stop = n_frames
+        #         try:
+        #             step = int(slice[2])
+        #         except (IndexError, ValueError):
+        #             step = 1
+        #         frames = np.arange(start, stop, step)
+        projected = func(layer.data[frameSlice], axis=0)
         name = layer.name + f" {method}-proj"
         tform = self.worldToLayerTransform3x3(layer)
-        return self.viewer.add_image(projected, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
+        return self.viewer.add_image(projected, name=name, affine=tform, 
+            blending=layer.blending, colormap=layer.colormap, opacity=layer.opacity)
     
     def splitImageLayer(self, layer, regions=None):
         if not self.isImageLayer(layer):
@@ -2069,92 +2077,117 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 topleft_layer.metadata['subimage_slice'] = startstop
             return topleft_layer, topright_layer, bottomleft_layer, bottomright_layer
     
-    def sliceImageLayer(self, layer, cropSlice=None):
-        if not self.isImageStackLayer(layer):
+    def sliceImageLayer(self, layer, slices=None):
+        if not self.isImageLayer(layer):
             return
-        bounds = np.hstack([
-            np.zeros([len(layer.data.shape),1], dtype=int), 
-            np.array(layer.data.shape, dtype=int).reshape([-1,1])
-            ])
-        if cropSlice is None:
-            cropSlice = self.sliceImageEdit.text().strip()
-            if cropSlice == "":
-                return
-        if type(cropSlice) is str:
-            cropSlice = [[s.strip() for s in lim.split(':')] for lim in cropSlice.strip().split(',')]
-            if len(cropSlice) == 1:
-                # frame crop
-                cropSliceDims = [0]
-            elif len(cropSlice) == 2:
-                # row,col crop
-                cropSliceDims = [-2, -1]
-            else:
-                # frame,...,row,col crop
-                cropSliceDims = list(range(len(layer.data.shape)))
-            for i in range(len(cropSlice)):
-                for j in range(len(cropSlice[i])):
-                    if cropSlice[i][j] == "":
-                        if j < 2:
-                            cropSlice[i][j] = bounds[cropSliceDims[i],j]
-                        else:
-                            cropSlice[i][j] = 1
-                    else:
-                        cropSlice[i][j] = int(cropSlice[i][j])
-                if len(cropSlice[i]) == 2:
-                    cropSlice[i].append(1)
-        # cropSlice = [starts column, stops column, steps column]
-        # e.g., startstop = [[frame start, frame stop, frame step], [row start, row stop, row step], [col start, col stop, col step]]
-        cropSlice = np.array(cropSlice, dtype=int)
-        if cropSlice.size % 2 == 0:
-            cropSlice = cropSlice.reshape([-1,2])
-            cropSlice = np.hstack([
-                cropSlice, np.ones([cropSlice.shape[0],1], dtype=int)
-            ])
-        elif cropSlice.size % 3 == 0:
-            cropSlice = cropSlice.reshape([-1,3])
-        starts = cropSlice[:,0]
-        stops = cropSlice[:,1]
-        steps = cropSlice[:,2]
-        if len(starts) == 1:
-            # frame crop
-            crop = layer.data[starts[0]:stops[0]:steps[0]]
-        elif len(starts) == 2:
-            # row,col crop
-            crop = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-        else:
-            # frame,...,row,col crop
-            indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-            crop = layer.data[indexer]
-        name = layer.name + " crop"
-        crop_layer = self.viewer.add_image(crop, name=name, affine=layer.affine, blending=layer.blending, colormap=layer.colormap)
+        if slices is None:
+            slices = self.sliceImageEdit.text().strip()
+        if isinstance(slices, str):
+            slices = str2slice(slices)
+        # bounds = np.hstack([
+        #     np.zeros([len(layer.data.shape),1], dtype=int), 
+        #     np.array(layer.data.shape, dtype=int).reshape([-1,1])
+        #     ])
+        # if cropSlice is None:
+        #     cropSlice = self.sliceImageEdit.text().strip()
+        #     if cropSlice == "":
+        #         return
+        # if type(cropSlice) is str:
+        #     cropSlice = [[s.strip() for s in lim.split(':')] for lim in cropSlice.strip().split(',')]
+        #     if len(cropSlice) == 1:
+        #         # frame crop
+        #         cropSliceDims = [0]
+        #     elif len(cropSlice) == 2:
+        #         # row,col crop
+        #         cropSliceDims = [-2, -1]
+        #     else:
+        #         # frame,...,row,col crop
+        #         cropSliceDims = list(range(len(layer.data.shape)))
+        #     for i in range(len(cropSlice)):
+        #         for j in range(len(cropSlice[i])):
+        #             if cropSlice[i][j] == "":
+        #                 if j < 2:
+        #                     cropSlice[i][j] = bounds[cropSliceDims[i],j]
+        #                 else:
+        #                     cropSlice[i][j] = 1
+        #             else:
+        #                 cropSlice[i][j] = int(cropSlice[i][j])
+        #         if len(cropSlice[i]) == 2:
+        #             cropSlice[i].append(1)
+        # # cropSlice = [starts column, stops column, steps column]
+        # # e.g., startstop = [[frame start, frame stop, frame step], [row start, row stop, row step], [col start, col stop, col step]]
+        # cropSlice = np.array(cropSlice, dtype=int)
+        # if cropSlice.size % 2 == 0:
+        #     cropSlice = cropSlice.reshape([-1,2])
+        #     cropSlice = np.hstack([
+        #         cropSlice, np.ones([cropSlice.shape[0],1], dtype=int)
+        #     ])
+        # elif cropSlice.size % 3 == 0:
+        #     cropSlice = cropSlice.reshape([-1,3])
+        # starts = cropSlice[:,0]
+        # stops = cropSlice[:,1]
+        # steps = cropSlice[:,2]
+        # if len(starts) == 1:
+        #     # frame crop
+        #     crop = layer.data[starts[0]:stops[0]:steps[0]]
+        # elif len(starts) == 2:
+        #     # row,col crop
+        #     crop = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
+        # else:
+        #     # frame,...,row,col crop
+        #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
+        #     crop = layer.data[indexer]
+        imageSlice = layer.data[slices]
+        name = layer.name + " slice"
+        tform = self.worldToLayerTransform3x3(layer)
+        imageSliceLayer = self.viewer.add_image(imageSlice, name=name, affine=tform, 
+            blending=layer.blending, colormap=layer.colormap, opacity=layer.opacity)
         imageAbsPath = self.getImageLayerAbsFilePath(layer)
         if imageAbsPath is None:
-            return crop_layer
-        crop_layer.metadata['image_file_abspath'] = imageAbsPath
+            return imageSliceLayer
+        imageSliceLayer.metadata['image_file_abspath'] = imageAbsPath
         if 'subimage_slice' in layer.metadata:
-            subimage_slice = layer.metadata['subimage_slice'].copy()
-            if subimage_slice.shape[1] == 2:
-                subimage_slice = np.hstack([
-                    subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
+            subimage_slice = layer.metadata['subimage_slice'].copy().astype(int)
+        else:
+            subimage_slice = np.zeros([0,3], dtype=int)
+        for i in range(len(slices)):
+            start, stop, step = slices[i].start, slices[i].stop, slices[i].step
+            if subimage_slice.shape[0] > i:
+                prevStart, prevStop, prevStep = subimage_slice[i]
+                newStart = prevStart if start is None else prevStart + start
+                newStop = prevStop if stop is None else prevStart + stop
+                newStep = prevStep if step is None else prevStep * step
+                subimage_slice[i] = newStart, newStop, newStep
+            else:
+                start = 0 if start is None else (start if start >= 0 else layer.data.shape[i] + start)
+                stop = layer.data.shape[i] if stop is None else (stop if stop >= 0 else layer.data.shape[i] + stop)
+                step = 1 if step is None else step
+                subimage_slice = np.vstack([
+                    subimage_slice,
+                    np.array([[start, stop, step]], dtype=int)
                 ])
-        else:
-            subimage_slice = np.hstack([
-                bounds, np.ones([bounds.shape[0],1], dtype=int)
-            ])
-        if len(starts) == 1:
-            # frame crop
-            cropSlice[0,:2] += subimage_slice[0,0]
-            subimage_slice[0] = cropSlice
-        elif len(starts) == 2:
-            # row,col crop
-            cropSlice[-2:,:2] += subimage_slice[-2:,0].reshape([2,1])
-            subimage_slice[-2:] = cropSlice
-        else:
-            # frame,...,row,col crop
-            cropSlice[:,:2] += subimage_slice[:,0].reshape([-1,1])
-            subimage_slice = cropSlice
-        crop_layer.metadata['subimage_slice'] = subimage_slice
-        return crop_layer
+        #     if subimage_slice.shape[1] == 2:
+        #         subimage_slice = np.hstack([
+        #             subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
+        #         ])
+        # else:
+        #     subimage_slice = np.hstack([
+        #         bounds, np.ones([bounds.shape[0],1], dtype=int)
+        #     ])
+        # if len(starts) == 1:
+        #     # frame crop
+        #     cropSlice[0,:2] += subimage_slice[0,0]
+        #     subimage_slice[0] = cropSlice
+        # elif len(starts) == 2:
+        #     # row,col crop
+        #     cropSlice[-2:,:2] += subimage_slice[-2:,0].reshape([2,1])
+        #     subimage_slice[-2:] = cropSlice
+        # else:
+        #     # frame,...,row,col crop
+        #     cropSlice[:,:2] += subimage_slice[:,0].reshape([-1,1])
+        #     subimage_slice = cropSlice
+        imageSliceLayer.metadata['subimage_slice'] = subimage_slice
+        return imageSliceLayer
     
     def gaussianFilterImageLayer(self, layer, sigma=None):
         if not self.isImageLayer(layer):
@@ -2162,18 +2195,21 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if sigma is None:
             sigma = self.gaussianFilterSigmaSpinBox.value()
         if self.isImageStackLayer(layer):
-            # default is to not blur together images in stack
+            # default is to not blur together images in stack (i.e., non-zero sigma in frame dimension)
             if type(sigma) is float:
-                sigma = (0, sigma, sigma)
-            elif len(sigma) == 1:
-                sigma = (0, sigma[0], sigma[0])
-            elif len(sigma) == 2:
-                sigma = (0, sigma[0], sigma[1])
+                sigma = [0]*(layer.ndim - 2) + [sigma, sigma]
+            else:
+                sigma = [0]*(layer.ndim - len(sigma)) + list(sigma)
+            # elif len(sigma) == 1:
+            #     sigma = (0, sigma[0], sigma[0])
+            # elif len(sigma) == 2:
+            #     sigma = (0, sigma[0], sigma[1])
         filtered = filters.gaussian(layer.data, sigma=sigma, preserve_range=True)
         name = layer.name + " gauss-filt"
         tform = self.worldToLayerTransform3x3(layer)
         return self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
 
+    # TODO: handle 4d and higher dimension images (apply tophat to last two row,col dimensions)
     def tophatFilterImageLayer(self, layer, diskRadius=None):
         if not self.isImageLayer(layer):
             return
@@ -2437,7 +2473,18 @@ def printDictStructure(dic, start="", indent="\t"):
                 print(start, indent, key, '?')
 
 
-def strToRgba(color):
+def str2slice(sliceStr):
+    if sliceStr.strip() == "":
+        return (slice(None),)
+    dimSliceStrs = [dimSliceStr.strip() for dimSliceStr in sliceStr.split(',')]
+    slices = []  # one slice per dimension
+    for dimSliceStr in dimSliceStrs:
+        sliceIndexes = [int(idx) if idx.strip != "" else None for idx in dimSliceStr.split(':')]
+        slices.append(slice(*sliceIndexes))
+    return tuple(slices)
+
+
+def str2rgba(color):
     color = color.strip()
     if color == "":
         # transparent
