@@ -3,6 +3,8 @@
 
 import os
 import math
+# from colorsys import rgb_to_hsv, hsv_to_rgb
+# from pprint import pprint
 import numpy as np
 import pandas as pd
 import tifffile
@@ -11,7 +13,8 @@ from scipy.spatial import distance
 from skimage import filters, morphology, measure
 import napari
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QColor, QImage, QPixmap
 from PyQt5.QtWidgets import QWidget, QTabWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QFormLayout, QGroupBox, \
     QFileDialog, QTextEdit, QComboBox, QLabel, QLineEdit, QPushButton, QSpinBox, QCheckBox, QMessageBox, QDoubleSpinBox, \
     QInputDialog
@@ -34,22 +37,21 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         Image layer.metadata
             ['image_file_abspath'] = "abs/path/to/image/"
             ['subimage_slice'] = [ndim x 2] start:stop or [ndim x 3] start:stop:step slice
-            ['point_zprojections']
-                [points-layer-name] = [NxT] zprojections for points-layer-name
+            ['roi_zprojections']
+                [roi-layer-name] = [NxT] zprojections for ROIs in roi-layer-name
         
-        Points layer.features
+        Shapes/Points layer.features
             ['tags'] = series of string tags for each point
         
         layerData
-            ['point_zprojection_plot'] = pyqtgraph plot object
-            ['point_zprojection_plot_data'] = pyqtgraph data series plot object
-            ['point_zprojection_plot_vline'] = pyqtgraph vertical line plot object
+            ['roi_zprojection_plot'] = pyqtgraph plot object
+            ['roi_zprojection_plot_data'] = pyqtgraph data series plot object
+            ['roi_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
+        - account for grid view?
+        - support per frame point positions (point tracking)? i.e., napari.layers.Tracks
         - point size does not scale during zoom on Mac! (see https://github.com/vispy/vispy/issues/2078, maybe no fix?)
-        - test subimage_slice metadata
-        - support per frame point positions (point tracking), i.e., napari.layers.Tracks
-        - z-projection tag filter custom AND, OR grouping
     """
     
     def __init__(self, napari_viewer):
@@ -60,17 +62,17 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         # Stored separately to keep non-serealizable objects (e.g., QObjects) out of the layer metadata dicts.
         # This unfortunately means we will have to manage this list upon any change to the layer order.
         # Other layer data that can be serialized and should be saved can be stored in the layer metadata dicts.
-        self.layerMetadata = []
+        self._layerMetadata = []
 
         # For copying and pasting layer transforms.
-        self.layerTransformCopy = np.eye(3)
+        self._layerTransformCopy = np.eye(3)
 
         # Keep track of selected point index
         # so we know if we are incrementing or decrementing the index when filtering tags.
-        self.pointIndex = None
+        self._roiIndex = None
 
-        # Default point size (diameter in pixels).
-        self.defaultPointSize = 5
+        # Special layer for selected ROI highlighting
+        self._selectedRoiLayer = None
 
         # setup UI
         self.initUI()
@@ -83,104 +85,138 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.viewer.mouse_drag_callbacks.append(self.onMouseClickedOrDragged)
         self.viewer.mouse_double_click_callbacks.append(self.onMouseDoubleClicked)
 
-        # unit tests
+        # testing
         # self.unitTests()
-        self.customInit()
+        # self.TO_BE_REMOVED_customInit()
+
+    
+    # TESTING
     
     def unitTests(self):
         data2d = np.random.randint(0, 65536 + 1, [1024, 1024]).astype(np.uint16)
         data3d = np.random.randint(0, 65536 + 1, [100, 1024, 1024]).astype(np.uint16)
-        points = np.random.uniform(0, 1023, size=[10, 2])
+        points = np.random.uniform(10, 1013, size=[10, 2])
 
-        if not os.path.isdir("unit tests/"):
-            os.makedirs("unit tests/")
-        data2dPath = "unit tests/data2d.tif"
-        data3dPath = "unit tests/data3d.tif"
+        if not os.path.isdir("unit-tests/"):
+            os.makedirs("unit-tests/")
+        data2dPath = "unit-tests/data2d.tif"
+        data3dPath = "unit-tests/data3d.tif"
         tifffile.imwrite(data2dPath, data2d)
         tifffile.imwrite(data3dPath, data3d)
 
-        layer_data2d = self.openTIFF(data2dPath, memorymap=False)
-        layer_data2d.colormap = 'green'
+        layer = self.openTIFF(data2dPath, memorymap=False)
+        layer.colormap = 'green'
 
-        layer_data3d = self.openTIFF(data3dPath, memorymap=False)
-        layer_data3d.colormap = 'magenta'
+        layer = self.openTIFF(data3dPath, memorymap=False)
+        layer.colormap = 'magenta'
 
-        layer_data2d_memmap = self.openTIFF(data2dPath, memorymap=True)
-        layer_data2d_memmap.name = "data2d memmap"
-        layer_data2d_memmap.colormap = 'cyan'
+        layer = self.openTIFF(data2dPath, memorymap=True)
+        layer.name = "data2d memmap"
+        layer.colormap = 'cyan'
 
-        layer_data3d_memmap = self.openTIFF(data3dPath, memorymap=True)
-        layer_data3d_memmap.name = "data3d memmap"
-        layer_data3d_memmap.colormap = 'red'
+        layer = self.openTIFF(data3dPath, memorymap=True)
+        layer.name = "data3d memmap"
+        layer.colormap = 'red'
 
-        n_points = len(points)
-        features = pd.DataFrame({"tags": [str(i) for i in range(n_points)]})
-        features.loc[3,"tags"] = ""
-        layer_points = self.viewer.add_points(points, name="points", features=features, 
-            size=5, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
-            face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
-        
-        pointMasks = [np.array([[True]]), self.getPointMask(layer_points.size[0])]
-        for pointMask in pointMasks:
-            self.zprojectPointsLayer(layer_points, pointMask=pointMask)
-        
-            sessionPath = 'unit tests/session.mat'
-            self.exportSession(sessionPath)
-            self.viewer.layers.clear()
-            self.importSession(sessionPath)
+        # test single pixel Z-projections
+        layer = self.addRoisLayer(center=points, size=1, shape_type="point", name="points")
+        pointFeatures = layer.features.copy()
+        self.zprojectRoisInImageLayers(layer)
+        for i, point in enumerate(points):
+            row, col = np.round(point).astype(int)
+            for imageLayer in self.imageStackLayers():
+                zproj = imageLayer.data[:,row,col]
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
 
-            sesseionAbsPath = os.path.abspath(sessionPath)
-            sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
-            data2dAbsPath = os.path.abspath(data2dPath)
-            data3dAbsPath = os.path.abspath(data3dPath)
-            data2dRelPath = os.path.relpath(data2dAbsPath, start=sessionAbsDir)
-            data3dRelPath = os.path.relpath(data3dAbsPath, start=sessionAbsDir)
+        # test ellipitcal ROI Z-projections
+        ellipseSize = 5
+        ellipseFeatures = pd.DataFrame({"tags": [str(i) for i in range(len(layer.data))]})
+        ellipseFeatures.loc[3,"tags"] = ""
+        layer = self.addRoisLayer(center=points, size=ellipseSize, shape_type="ellipse", name="ellipses", features=ellipseFeatures)
+        self.zprojectRoisInImageLayers(layer)
+        mask = getRoiMask(ellipseSize, "ellipse")
+        for i, point in enumerate(points):
+            for imageLayer in self.imageStackLayers():
+                zproj = zprojectRoiInImage(imageLayer.data, point, mask)
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
 
-            for layer in self.viewer.layers:
-                if layer.name == "data2d":
-                    assert(np.all(layer.data == data2d))
-                    assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
-                elif layer.name == "data3d":
-                    assert(np.all(layer.data == data3d))
-                    assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
-                elif layer.name == "data2d memmap":
-                    assert(np.all(layer.data == data2d))
-                    assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
-                elif layer.name == "data3d memmap":
-                    assert(np.all(layer.data == data3d))
-                    assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
-                elif layer.name == "points":
-                    assert(np.all(layer.data == points))
-                    # df = pd.DataFrame()
-                    # df["tags export"] = features["tags"]
-                    # df["tags import"] = layer.features["tags"]
-                    # df["check"] = layer.features["tags"] == features["tags"]
-                    # print(df)
-                    for col in layer.features.columns:
-                        assert((layer.features[col] == features[col]).all())
-                    for imlayer in self.viewer.layers:
-                        if imlayer.name == "data3d" or imlayer.name == "data3d memmap":
-                            zprojs = imlayer.metadata['point_zprojections'][layer.name]
-                            for i in range(n_points):
-                                point = layer.data[i]
-                                if pointMask.shape == (1,1):
-                                    row, col = np.round(point).astype(int)
-                                    zproj = imlayer.data[:,row,col]
-                                    assert(np.all(zprojs[i] == zproj))
-                                else:
-                                    zproj = zprojectPointInImageStack(imlayer.data, point, pointMask=pointMask)
-                                    assert(np.allclose(zprojs[i], zproj))
+        # test rectangular ROI Z-projections
+        rectSize = 5
+        layer = self.addRoisLayer(center=points, size=rectSize, shape_type="rectangle", name="rectangles")
+        rectFeatures = layer.features.copy()
+        self.zprojectRoisInImageLayers(layer)
+        for i, point in enumerate(points):
+            row, col = np.round(point).astype(int)
+            for imageLayer in self.imageStackLayers():
+                zproj = np.squeeze(imageLayer.data[:,row-2:row+3,col-2:col+3].mean(axis=(-2,-1)))
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
+
+        # test session file i/o
+        sessionPath = 'unit-tests/session.mat'
+        self.exportSession(sessionPath)
+        self.viewer.layers.clear()
+        self.importSession(sessionPath)
+
+        # verify session file paths
+        sesseionAbsPath = os.path.abspath(sessionPath)
+        sessionAbsDir, sessionFile = os.path.split(sesseionAbsPath)
+        data2dAbsPath = os.path.abspath(data2dPath)
+        data3dAbsPath = os.path.abspath(data3dPath)
+        data2dRelPath = os.path.relpath(data2dAbsPath, start=sessionAbsDir)
+        data3dRelPath = os.path.relpath(data3dAbsPath, start=sessionAbsDir)
+
+        # verify session data
+        layer = self.viewer.layers["data2d"]
+        assert(np.all(layer.data == data2d))
+        assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+        layer = self.viewer.layers["data3d"]
+        assert(np.all(layer.data == data3d))
+        assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+        layer = self.viewer.layers["data2d memmap"]
+        assert(np.all(layer.data == data2d))
+        assert(layer.metadata['image_file_abspath'] == data2dAbsPath)
+        layer = self.viewer.layers["data3d memmap"]
+        assert(np.all(layer.data == data3d))
+        assert(layer.metadata['image_file_abspath'] == data3dAbsPath)
+        layer = self.viewer.layers["points"]
+        assert(np.allclose(layer.data, points))
+        assert(np.allclose(layer.size, 1))
+        for col in layer.features.columns:
+            assert((layer.features[col] == pointFeatures[col]).all())
+        for i, point in enumerate(points):
+            row, col = np.round(point).astype(int)
+            for imageLayer in self.imageStackLayers():
+                zproj = imageLayer.data[:,row,col]
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
+        layer = self.viewer.layers["ellipses"]
+        centers = self.getRoiCenters2d(layer)
+        sizes = self.getRoiSizes2d(layer)
+        assert(np.allclose(centers, points))
+        assert(np.allclose(sizes, ellipseSize))
+        for col in layer.features.columns:
+            assert((layer.features[col] == ellipseFeatures[col]).all())
+        mask = getRoiMask(ellipseSize, "ellipse")
+        for i, point in enumerate(points):
+            for imageLayer in self.imageStackLayers():
+                zproj = zprojectRoiInImage(imageLayer.data, point, mask)
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
+        layer = self.viewer.layers["rectangles"]
+        centers = self.getRoiCenters2d(layer)
+        sizes = self.getRoiSizes2d(layer)
+        assert(np.allclose(centers, points))
+        assert(np.allclose(sizes, rectSize))
+        for col in layer.features.columns:
+            assert((layer.features[col] == rectFeatures[col]).all())
+        mask = getRoiMask(rectSize, "rectangle")
+        for i, point in enumerate(points):
+            for imageLayer in self.imageStackLayers():
+                zproj = zprojectRoiInImage(imageLayer.data, point, mask)
+                assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
     
-    def customInit(self):
+    def TO_BE_REMOVED_customInit(self):
         # This probably does NOT apply to you.
         # This is for custom files as a quick test
         # and will be removed in a future version.
-
-        layer = self.openTIFF('test.tif')
-        print(layer.source)
-        print(layer.source.path)
-        print(layer.metadata['image_file_abspath'])
-
         theta = 0.4
         tform = np.array([
             [np.cos(theta), -np.sin(theta), 100],
@@ -194,7 +230,9 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         layer = self.zprojectImageLayer(layer, method="mean")
         layer = self.gaussianFilterImageLayer(layer, sigma=1)
         layer = self.tophatFilterImageLayer(layer, diskRadius=3)
-        layer = self.findPeaksInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
+        layer = self.findPeakRoisInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
+        layer.edge_color = 'red'
+        del self.viewer.layers[-4:-2]
 
         layer = self.openTIFF('test.tif')
         layer.name = 'fcGMP'
@@ -203,33 +241,20 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         layer = self.zprojectImageLayer(layer, method="mean")
         layer = self.gaussianFilterImageLayer(layer, sigma=1)
         layer = self.tophatFilterImageLayer(layer, diskRadius=3)
-        layer = self.findPeaksInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
-
-        # layer = self.openTIFF('spots.tif', memorymap=False)
-        # layer.name = 'eGFP spots'
-        # layer.colormap = 'green'
-
-        # layer = self.openTIFF('spots.tif', memorymap=False)
-        # layer.name = 'fcGMP spots'
-        # layer.colormap = 'magenta'
-        # layer.affine = rot
-
-        spots = np.random.uniform(0, 255, (15, 2))
-        self.viewer.add_points(spots, name='spots', size=9, edge_width=1, edge_width_is_relative=False, 
-            edge_color='yellow', face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
+        layer = self.findPeakRoisInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
+        layer.edge_color = 'cyan'
+        del self.viewer.layers[-4:-2]
     
-    def printLayerMetadataStructure(self):
-        for layer in self.viewer.layers:
-            print(layer.name)
-            printDictStructure(layer.metadata, start="\t")
+    # UI
     
     def initUI(self):
         self.addMetadataTab()
-        self.addFileIOTab()
+        self.addFileTab()
         self.addImageProcessingTab()
         self.addLayerRegistrationTab()
-        self.addPointsTab()
-        self.addPointZProjectionsTab()
+        self.addRoisTab()
+        self.addColocalizationTab()
+        self.addRoiZProjectionsTab()
     
     def addMetadataTab(self, title="Meta"):
         self.dateEdit = QLineEdit()
@@ -247,7 +272,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.addRow("Notes", self.notesEdit)
         self.addTab(tab, title)
     
-    def addFileIOTab(self, title="I/O"):
+    def addFileTab(self, title="File"):
         self.openMemoryMappedTiffButton = QPushButton("Open memory-mapped TIFF image file")
         self.openMemoryMappedTiffButton.clicked.connect(lambda x: self.openTIFF())
 
@@ -258,13 +283,15 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.saveSessionButton.clicked.connect(lambda x: self.exportSession())
 
         tab = QWidget()
-        tab.setMaximumWidth(500)
-        vbox = QVBoxLayout(tab)
+        hbox = QHBoxLayout(tab)
+        vbox = QVBoxLayout()
         vbox.setSpacing(5)
         vbox.addWidget(self.openMemoryMappedTiffButton)
         vbox.addWidget(self.openSessionButton)
         vbox.addWidget(self.saveSessionButton)
         vbox.addStretch()
+        hbox.addLayout(vbox)
+        hbox.addStretch()
         self.addTab(tab, title)
     
     def addImageProcessingTab(self, title="Image"):
@@ -277,49 +304,45 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.splitImageRegionsComboBox.addItem("Quad")
         self.splitImageRegionsComboBox.setCurrentText("Top/Bottom")
 
-        self.cropImageButton = QPushButton("Crop Image")
-        self.cropImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.cropImageLayer))
+        self.sliceImageButton = QPushButton("Slice Image")
+        self.sliceImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.sliceImageLayer))
 
-        self.cropImageSliceEdit = QLineEdit()
+        self.sliceImageEdit = QLineEdit()
 
         self.zprojectImageButton = QPushButton("Z-Project Image")
         self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
 
-        self.zprojectOperationComboBox = QComboBox()
-        self.zprojectOperationComboBox.addItem("max")
-        self.zprojectOperationComboBox.addItem("min")
-        self.zprojectOperationComboBox.addItem("std")
-        self.zprojectOperationComboBox.addItem("sum")
-        self.zprojectOperationComboBox.addItem("mean")
-        self.zprojectOperationComboBox.addItem("median")
-        self.zprojectOperationComboBox.setCurrentText("mean")
+        self.zprojectImageOperationComboBox = QComboBox()
+        self.zprojectImageOperationComboBox.addItem("max")
+        self.zprojectImageOperationComboBox.addItem("min")
+        self.zprojectImageOperationComboBox.addItem("std")
+        self.zprojectImageOperationComboBox.addItem("sum")
+        self.zprojectImageOperationComboBox.addItem("mean")
+        self.zprojectImageOperationComboBox.addItem("median")
+        self.zprojectImageOperationComboBox.setCurrentText("mean")
 
         self.zprojectImageFramesEdit = QLineEdit()
 
         self.gaussianFilterButton = QPushButton("Gaussian Filter")
         self.gaussianFilterButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.gaussianFilterImageLayer))
 
-        self.gaussianSigmaSpinBox = QDoubleSpinBox()
-        self.gaussianSigmaSpinBox.setValue(1)
+        self.gaussianFilterSigmaSpinBox = QDoubleSpinBox()
+        self.gaussianFilterSigmaSpinBox.setValue(1)
 
         self.tophatFilterButton = QPushButton("Tophat Filter")
         self.tophatFilterButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.tophatFilterImageLayer))
 
-        self.tophatDiskRadiusSpinBox = QDoubleSpinBox()
-        self.tophatDiskRadiusSpinBox.setValue(3)
+        self.tophatFilterDiskRadiusSpinBox = QDoubleSpinBox()
+        self.tophatFilterDiskRadiusSpinBox.setValue(3)
 
         tab = QWidget()
-        tab.setMaximumWidth(500)
-        vbox = QVBoxLayout(tab)
+        hbox = QHBoxLayout(tab)
+        vbox = QVBoxLayout()
         vbox.setSpacing(5)
 
         text = QLabel("Applied to all selected image layers.\nResults are returned in new layers.")
         text.setWordWrap(True)
         vbox.addWidget(text)
-
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(10)
 
         group = QGroupBox()
         form = QFormLayout(group)
@@ -327,54 +350,55 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.setSpacing(5)
         form.addRow(self.splitImageButton)
         form.addRow("Regions", self.splitImageRegionsComboBox)
-        grid.addWidget(group, 0, 0)
+        vbox.addWidget(group)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
-        form.addRow(self.cropImageButton)
-        form.addRow("start:stop,...", self.cropImageSliceEdit)
-        grid.addWidget(group, 1, 0)
+        form.addRow(self.sliceImageButton)
+        form.addRow("start:stop[:step],...", self.sliceImageEdit)
+        vbox.addWidget(group)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.zprojectImageButton)
-        form.addRow("Project", self.zprojectOperationComboBox)
-        form.addRow("Z-start:stop:step", self.zprojectImageFramesEdit)
-        grid.addWidget(group, 2, 0)
+        form.addRow("Project", self.zprojectImageOperationComboBox)
+        form.addRow("start:stop[:step]", self.zprojectImageFramesEdit)
+        vbox.addWidget(group)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.gaussianFilterButton)
-        form.addRow("Sigma", self.gaussianSigmaSpinBox)
-        grid.addWidget(group, 3, 0)
+        form.addRow("Sigma", self.gaussianFilterSigmaSpinBox)
+        vbox.addWidget(group)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.tophatFilterButton)
-        form.addRow("Disk Radius", self.tophatDiskRadiusSpinBox)
-        grid.addWidget(group, 4, 0)
+        form.addRow("Disk Radius", self.tophatFilterDiskRadiusSpinBox)
+        vbox.addWidget(group)
 
-        vbox.addLayout(grid)
         vbox.addStretch()
+        hbox.addLayout(vbox)
+        hbox.addStretch()
         self.addTab(tab, title)
     
     def addLayerRegistrationTab(self, title="Align"):
         self.fixedLayerComboBox = QComboBox()
         self.movingLayerComboBox = QComboBox()
 
-        self.layerRegTransformTypeComboBox = QComboBox()
-        self.layerRegTransformTypeComboBox.addItem("Translation")
-        self.layerRegTransformTypeComboBox.addItem("Rigid Body")
-        self.layerRegTransformTypeComboBox.addItem("Affine")
-        self.layerRegTransformTypeComboBox.setCurrentText("Affine")
+        self.layerRegistrationTransformTypeComboBox = QComboBox()
+        self.layerRegistrationTransformTypeComboBox.addItem("Translation")
+        self.layerRegistrationTransformTypeComboBox.addItem("Rigid Body")
+        self.layerRegistrationTransformTypeComboBox.addItem("Affine")
+        self.layerRegistrationTransformTypeComboBox.setCurrentText("Affine")
 
         self.registerLayersButton = QPushButton("Register Layers")
         self.registerLayersButton.clicked.connect(lambda x: self.registerLayers())
@@ -389,9 +413,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.clearLayerTransformButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.clearLayerTransform))
 
         tab = QWidget()
-        tab.setMaximumWidth(500)
-        vbox = QVBoxLayout(tab)
+        hbox = QHBoxLayout(tab)
+        vbox = QVBoxLayout()
         vbox.setSpacing(5)
+
         text = QLabel("Registration sets the layer affine transform without altering the layer data.")
         text.setWordWrap(True)
         vbox.addWidget(text)
@@ -399,135 +424,536 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         group = QGroupBox()
         form = QFormLayout(group)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.registerLayersButton)
         form.addRow("Fixed Layer", self.fixedLayerComboBox)
         form.addRow("Moving Layer", self.movingLayerComboBox)
-        form.addRow("Transform", self.layerRegTransformTypeComboBox)
+        form.addRow("Transform", self.layerRegistrationTransformTypeComboBox)
         vbox.addWidget(group)
 
         vbox.addWidget(self.copyLayerTransformButton)
         vbox.addWidget(self.pasteLayerTransformButton)
         vbox.addWidget(self.clearLayerTransformButton)
+
         vbox.addStretch()
+        hbox.addLayout(vbox)
+        hbox.addStretch()
         self.addTab(tab, title)
     
-    def addPointsTab(self, title="Points"):
+    def addRoisTab(self, title="ROIs"):
+        self.updateRoisButton = QPushButton("Update ROIs in all selected ROI layers")
+        self.updateRoisButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.updateRoisLayer))
+
+        self.roiShapeComboBox = QComboBox()
+        self.roiShapeComboBox.addItem("point")
+        self.roiShapeComboBox.addItem("ellipse")
+        self.roiShapeComboBox.addItem("rectangle")
+        self.roiShapeComboBox.setCurrentText("ellipse")
+        self.roiShapeComboBox.currentTextChanged.connect(self.updateRoiMaskWidget)
+
+        self.roiSizeSpinBox = QDoubleSpinBox()
+        self.roiSizeSpinBox.setMinimum(1)
+        self.roiSizeSpinBox.setMaximum(65000)
+        self.roiSizeSpinBox.setValue(5)
+        self.roiSizeSpinBox.valueChanged.connect(self.updateRoiMaskWidget)
+
+        self.roiEdgeWidthSpinBox = QDoubleSpinBox()
+        self.roiEdgeWidthSpinBox.setMinimum(0)
+        self.roiEdgeWidthSpinBox.setMaximum(100)
+        self.roiEdgeWidthSpinBox.setSingleStep(0.25)
+        self.roiEdgeWidthSpinBox.setValue(0.5)
+
+        self.roiEdgeColorEdit = QLineEdit("yellow")
+
+        self.roiFaceColorEdit = QLineEdit("")
+
+        self.selectedRoiEdgeWidthSpinBox = QDoubleSpinBox()
+        self.selectedRoiEdgeWidthSpinBox.setMinimum(0)
+        self.selectedRoiEdgeWidthSpinBox.setMaximum(100)
+        self.selectedRoiEdgeWidthSpinBox.setSingleStep(0.25)
+        self.selectedRoiEdgeWidthSpinBox.setValue(1)
+
+        self.selectedRoiEdgeColorEdit = QLineEdit("cyan")
+
         self.findPeakPointsButton = QPushButton("Find peaks in all selected image layers")
-        self.findPeakPointsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.findPeaksInImageLayer))
+        self.findPeakPointsButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.findPeakRoisInImageLayer))
 
         self.minPeakHeightSpinBox = QDoubleSpinBox()
+        self.minPeakHeightSpinBox.setMinimum(0)
         self.minPeakHeightSpinBox.setMaximum(65000)
         self.minPeakHeightSpinBox.setValue(10)
 
         self.minPeakSeparationSpinBox = QDoubleSpinBox()
-        self.minPeakSeparationSpinBox.setValue(self.defaultPointSize)
+        self.minPeakSeparationSpinBox.setMinimum(1)
+        self.minPeakSeparationSpinBox.setMaximum(65000)
+        self.minPeakSeparationSpinBox.setValue(self.roiSizeSpinBox.value())
 
-        self.setPointSizeButton = QPushButton("Set point size for all selected points layers")
-        self.setPointSizeButton.clicked.connect(lambda x: self.setSelectedPointsLayersPointSize())
+        self.zprojectRoisLayerButton = QPushButton("Compute ROI z-projections for all selected ROI layers")
+        self.zprojectRoisLayerButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectRoisInImageLayers))
 
-        self.setPointEdgeWidthButton = QPushButton("Set edge width for all selected points layers")
-        self.setPointEdgeWidthButton.clicked.connect(lambda x: self.setSelectedPointsLayersEdgeWidth())
-
-        self.zprojectPointsLayerButton = QPushButton("Compute point z-projections for all selected points layers")
-        self.zprojectPointsLayerButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectPointsLayer))
-
-        self.findColocalizedPointsButton = QPushButton("Find colocalized points")
-        self.findColocalizedPointsButton.clicked.connect(self.findColocalizedPoints)
-
-        self.colocPointsLayerComboBox = QComboBox()
-        self.colocPointsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-        self.colocNeighborsLayerComboBox = QComboBox()
-        self.colocNeighborsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-
-        self.colocNearestNeighborCutoffSpinBox = QDoubleSpinBox()
-        self.colocNearestNeighborCutoffSpinBox.setValue(self.defaultPointSize / 2)
-
-        self.colocalizationPlot = self.newPlot()
-        self.colocalizationPlot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
-        legend = pg.LegendItem()
-        legend.setParentItem(self.colocalizationPlot.getPlotItem())
-        legend.anchor((1,0), (1,0))
-        self.withinLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80), name="within layers")
-        self.betweenLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80), name="between layers")
-        self.colocalizationPlot.addItem(self.withinLayersNearestNeighborsHistogram)
-        self.colocalizationPlot.addItem(self.betweenLayersNearestNeighborsHistogram)
-        legend.addItem(self.withinLayersNearestNeighborsHistogram, "within layers")
-        legend.addItem(self.betweenLayersNearestNeighborsHistogram, "between layers")
+        self.roiMaskWidget = QWidget()
+        self.roiMaskGrid = QGridLayout(self.roiMaskWidget)
+        self.roiMaskGrid.setContentsMargins(5, 5, 5, 5)
+        self.roiMaskGrid.setSpacing(2)
+        self.updateRoiMaskWidget()
 
         tab = QWidget()
-        tab.setMaximumWidth(500)
-        vbox = QVBoxLayout(tab)
+        hbox = QHBoxLayout(tab)
+
+        # column 1
+        vbox = QVBoxLayout()
         vbox.setSpacing(5)
 
         group = QGroupBox()
         form = QFormLayout(group)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
+        form.addRow(self.updateRoisButton)
+        form.addRow("ROI Shape", self.roiShapeComboBox)
+        form.addRow("ROI Size", self.roiSizeSpinBox)
+        form.addRow("ROI Edge Width", self.roiEdgeWidthSpinBox)
+        form.addRow("ROI Edge Color", self.roiEdgeColorEdit)
+        form.addRow("ROI Face Color", self.roiFaceColorEdit)
+        form.addRow("Selected ROI Edge Width", self.selectedRoiEdgeWidthSpinBox)
+        form.addRow("Selected ROI Edge Color", self.selectedRoiEdgeColorEdit)
+        vbox.addWidget(group)
+
+        group = QGroupBox()
+        form = QFormLayout(group)
+        form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.findPeakPointsButton)
         form.addRow("Min Peak Height", self.minPeakHeightSpinBox)
         form.addRow("Min Separation", self.minPeakSeparationSpinBox)
         vbox.addWidget(group)
 
-        vbox.addWidget(self.setPointSizeButton)
-        vbox.addWidget(self.setPointEdgeWidthButton)
-        vbox.addWidget(self.zprojectPointsLayerButton)
+        group = QGroupBox()
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
+        form.addRow(self.zprojectRoisLayerButton)
+        vbox.addWidget(group)
+
+        vbox.addStretch()
+        hbox.addLayout(vbox)
+
+        # column 2
+        vbox = QVBoxLayout()
+
+        group = QGroupBox("ROI Mask")
+        gvbox = QVBoxLayout(group)
+        gvbox.addWidget(self.roiMaskWidget)
+        vbox.addWidget(group)
+
+        vbox.addStretch()
+        hbox.addLayout(vbox)
+
+        hbox.addStretch()
+        self.addTab(tab, title)
+    
+    def updateRoiMaskWidget(self):
+        roiShape = self.roiShapeComboBox.currentText()
+        roiSize = self.roiSizeSpinBox.value()
+        roiMask = getRoiMask(roiSize, roiShape).astype(float)
+        clearQLayout(self.roiMaskGrid)
+        n_rows, n_cols = roiMask.shape
+        for i in range(n_rows):
+            for j in range(n_cols):
+                cell = QLineEdit(str(roiMask[i,j]))
+                cell.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+                bg = min(max(0, int(roiMask[i,j] * 255)), 255)
+                bg = f"rgb({bg}, {bg}, {bg})"
+                fg = "white" if roiMask[i,j] < 0.5 else "black"
+                cell.setStyleSheet(f"width: 30; height: 30; background-color: {bg}; color: {fg}; font-size: 8pt")
+                cell.editingFinished.connect(self.updateRoiMaskWidget)
+                self.roiMaskGrid.addWidget(cell, i, j)
+    
+    def addColocalizationTab(self, title="Colocalization"):
+        self.findColocalizedRoisButton = QPushButton("Find colocalized ROIs")
+        self.findColocalizedRoisButton.clicked.connect(self.findColocalizedRois)
+
+        self.colocalizeRoisLayerComboBox = QComboBox()
+        self.colocalizeRoisLayerComboBox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        self.colocalizeNeighborsLayerComboBox = QComboBox()
+        self.colocalizeNeighborsLayerComboBox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+
+        self.colocalizeNearestNeighborCutoffSpinBox = QDoubleSpinBox()
+        self.colocalizeNearestNeighborCutoffSpinBox.setMinimum(0)
+        self.colocalizeNearestNeighborCutoffSpinBox.setMaximum(1000)
+        self.colocalizeNearestNeighborCutoffSpinBox.setSingleStep(0.5)
+        self.colocalizeNearestNeighborCutoffSpinBox.setValue(self.roiSizeSpinBox.value() / 2)
+
+        self.roiColocalizationPlot = self.newPlot()
+        self.roiColocalizationPlot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
+        legend = pg.LegendItem()
+        legend.setParentItem(self.roiColocalizationPlot.getPlotItem())
+        legend.anchor((1,0), (1,0))
+        self.withinRoiLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], name="within layers", 
+            stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80))
+        self.betweenRoiLayersNearestNeighborsHistogram = pg.PlotCurveItem([0, 0], [0], name="between layers", 
+            stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80))
+        self.roiColocalizationPlot.addItem(self.withinRoiLayersNearestNeighborsHistogram)
+        self.roiColocalizationPlot.addItem(self.betweenRoiLayersNearestNeighborsHistogram)
+        legend.addItem(self.withinRoiLayersNearestNeighborsHistogram, "within layers")
+        legend.addItem(self.betweenRoiLayersNearestNeighborsHistogram, "between layers")
+
+        tab = QWidget()
+        hbox = QHBoxLayout(tab)
+        vbox = QVBoxLayout()
+        vbox.setSpacing(5)
 
         group = QGroupBox()
         form = QFormLayout(group)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
-        form.addRow(self.findColocalizedPointsButton)
-        form.addRow("Points Layer", self.colocPointsLayerComboBox)
-        form.addRow("Neighbors Layer", self.colocNeighborsLayerComboBox)
-        form.addRow("Nearest Neighbor Distance Cutoff", self.colocNearestNeighborCutoffSpinBox)
-        form.addRow(self.colocalizationPlot)
+        form.addRow(self.findColocalizedRoisButton)
+        form.addRow("ROIs Layer", self.colocalizeRoisLayerComboBox)
+        form.addRow("Neighbors Layer", self.colocalizeNeighborsLayerComboBox)
+        form.addRow("Nearest Neighbor Distance Cutoff", self.colocalizeNearestNeighborCutoffSpinBox)
+        form.addRow(self.roiColocalizationPlot)
         vbox.addWidget(group)
 
         vbox.addStretch()
+        hbox.addLayout(vbox)
+        hbox.addStretch()
         self.addTab(tab, title)
     
-    def addPointZProjectionsTab(self, title="Point Z-Projections"):
-        self.zprojPlotLayout = QVBoxLayout()
-        self.zprojPlotLayout.setSpacing(0)
+    def addRoiZProjectionsTab(self, title="ROI Z-Projections"):
+        self.roiZProjectionPlotsLayout = QVBoxLayout()
+        self.roiZProjectionPlotsLayout.setSpacing(0)
 
-        self.zprojPointsLayerComboBox = QComboBox()
-        self.zprojPointsLayerComboBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
+        self.activeRoisLayerComboBox = QComboBox()
+        self.activeRoisLayerComboBox.textActivated.connect(lambda x: self.setSelectedRoiIndex())
 
-        self.zprojPointIndexSpinBox = QSpinBox()
-        self.zprojPointIndexSpinBox.setMaximum(65000)
-        self.zprojPointIndexSpinBox.setKeyboardTracking(False)
-        self.zprojPointIndexSpinBox.valueChanged.connect(lambda x: self.setSelectedPointIndex())
+        self.roiIndexSpinBox = QSpinBox()
+        self.roiIndexSpinBox.setMaximum(65000)
+        self.roiIndexSpinBox.setKeyboardTracking(False)
+        self.roiIndexSpinBox.valueChanged.connect(self.setSelectedRoiIndex)
 
-        self.zprojPointWorldPositionLabel = QLabel()
-        self.zprojNumPointsLabel = QLabel()
+        self.currentRoiWorldPositionLabel = QLabel()
+        self.numSelectedRoisLabel = QLabel()
 
-        self.zprojPointTagsEdit = QLineEdit()
-        self.zprojPointTagsEdit.editingFinished.connect(self.updateSelectedPointTags)
+        self.roiTagsEdit = QLineEdit()
+        self.roiTagsEdit.editingFinished.connect(self.updateSelectedRoiTags)
 
-        self.zprojPointTagFilterEdit = QLineEdit()
-        self.zprojPointTagFilterCheckBox = QCheckBox("Filter")
+        self.roiTagFilterEdit = QLineEdit()
+        self.roiTagFilterEdit.editingFinished.connect(self.setSelectedRoiIndex)
 
-        self.zprojNoVisibleImageStacksLabel = QLabel("No visible image stacks.")
+        self.roiTagFilterCheckBox = QCheckBox("Filter")
+        self.roiTagFilterCheckBox.stateChanged.connect(lambda state: self.setSelectedRoiIndex())
+
+        self.noVisibleImageStacksLabel = QLabel("No visible image stacks.")
 
         grid = QGridLayout()
         grid.setSpacing(5)
-        grid.addWidget(QLabel("Points Layer"), 0, 0, Qt.AlignRight)
-        grid.addWidget(self.zprojPointsLayerComboBox, 0, 1)
-        grid.addWidget(self.zprojNumPointsLabel, 0, 2)
-        grid.addWidget(self.zprojPointTagFilterCheckBox, 0, 3)
-        grid.addWidget(self.zprojPointTagFilterEdit, 0, 4)
-        grid.addWidget(QLabel("Point Index"), 1, 0, Qt.AlignRight)
-        grid.addWidget(self.zprojPointIndexSpinBox, 1, 1)
-        grid.addWidget(self.zprojPointWorldPositionLabel, 1, 2)
-        grid.addWidget(QLabel("Tags"), 1, 3, Qt.AlignRight)
-        grid.addWidget(self.zprojPointTagsEdit, 1, 4)
+        grid.addWidget(QLabel("ROIs Layer"), 0, 0, Qt.AlignRight)
+        grid.addWidget(self.activeRoisLayerComboBox, 0, 1)
+        grid.addWidget(self.numSelectedRoisLabel, 0, 2)
+        grid.addWidget(self.roiTagFilterCheckBox, 0, 3)
+        grid.addWidget(self.roiTagFilterEdit, 0, 4)
+        grid.addWidget(QLabel("ROI Index"), 1, 0, Qt.AlignRight)
+        grid.addWidget(self.roiIndexSpinBox, 1, 1)
+        grid.addWidget(self.currentRoiWorldPositionLabel, 1, 2)
+        grid.addWidget(QLabel("ROI Tags"), 1, 3, Qt.AlignRight)
+        grid.addWidget(self.roiTagsEdit, 1, 4)
 
         tab = QWidget()
         vbox = QVBoxLayout(tab)
         vbox.addLayout(grid)
-        vbox.addLayout(self.zprojPlotLayout)
-        vbox.addWidget(self.zprojNoVisibleImageStacksLabel)
+        vbox.addLayout(self.roiZProjectionPlotsLayout)
+        vbox.addWidget(self.noVisibleImageStacksLabel)
         self.addTab(tab, title)
+    
+    def roiZProjectionPlots(self):
+        return [data['roi_zprojection_plot'] for data in reversed(self._layerMetadata) if 'roi_zprojection_plot' in data]
+    
+    def linkRoiZProjectionPlots(self):
+        plots = self.roiZProjectionPlots()
+        for i in range(1, len(plots)):
+            plots[i].setXLink(plots[0])
+    
+    def clearRoiZProjectionPlots(self):
+        for layerMetadata in self._layerMetadata:
+            if 'roi_zprojection_plot_data' in layerMetadata:
+                layerMetadata['roi_zprojection_plot_data'].setData([])
+    
+    def newPlot(self) -> pg.PlotWidget:
+        plot = pg.PlotWidget()
+        plot.getAxis('left').setWidth(82)
+        plot.getAxis('right').setWidth(10)
+        plot.showGrid(x=True, y=True, alpha=0.3)
+        #plot.setBackground([38, 41, 48])
+        # hack to stop grid from clipping axis tick labels
+        for key in ['left', 'bottom']:
+            plot.getAxis(key).setGrid(False)
+        for key in ['right', 'top']:
+            plot.getAxis(key).setStyle(showValues=False)
+            plot.showAxis(key)
+        return plot
+    
+    def updateLayerSelectionBoxes(self):
+        # layer registration
+        fixedLayerName = self.fixedLayerComboBox.currentText()
+        movingLayerName = self.movingLayerComboBox.currentText()
+        self.fixedLayerComboBox.clear()
+        self.movingLayerComboBox.clear()
+        for layer in reversed(self.viewer.layers):
+            self.fixedLayerComboBox.addItem(layer.name)
+            self.movingLayerComboBox.addItem(layer.name)
+        try:
+            self.fixedLayerComboBox.setCurrentText(fixedLayerName)
+        except:
+            self.fixedLayerComboBox.setCurrentIndex(0)
+        try:
+            self.movingLayerComboBox.setCurrentText(movingLayerName)
+        except:
+            self.movingLayerComboBox.setCurrentIndex(0)
+        
+        # layer ROI colocalization
+        self.colocalizeRoisLayerComboBox.currentTextChanged.disconnect(self.updateRoisColocalizationPlot)
+        self.colocalizeNeighborsLayerComboBox.currentTextChanged.disconnect(self.updateRoisColocalizationPlot)
+        roisLayerName = self.colocalizeRoisLayerComboBox.currentText()
+        neighborsLayerName = self.colocalizeNeighborsLayerComboBox.currentText()
+        self.colocalizeRoisLayerComboBox.clear()
+        self.colocalizeNeighborsLayerComboBox.clear()
+        for layer in self.roisLayers():
+            self.colocalizeRoisLayerComboBox.addItem(layer.name)
+            self.colocalizeNeighborsLayerComboBox.addItem(layer.name)
+        try:
+            self.colocalizeRoisLayerComboBox.setCurrentText(roisLayerName)
+        except:
+            self.colocalizeRoisLayerComboBox.setCurrentIndex(0)
+        try:
+            self.colocalizeNeighborsLayerComboBox.setCurrentText(neighborsLayerName)
+        except:
+            self.colocalizeNeighborsLayerComboBox.setCurrentIndex(0)
+        self.colocalizeRoisLayerComboBox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        self.colocalizeNeighborsLayerComboBox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        self.updateRoisColocalizationPlot()
+        
+        # layer ROI z-projections
+        self.activeRoisLayerComboBox.textActivated.disconnect()
+        roisLayerName = self.activeRoisLayerComboBox.currentText()
+        self.activeRoisLayerComboBox.clear()
+        for layer in self.roisLayers():
+            self.activeRoisLayerComboBox.addItem(layer.name)
+        try:
+            self.activeRoisLayerComboBox.setCurrentText(roisLayerName)
+        except:
+            self.activeRoisLayerComboBox.setCurrentIndex(0)
+        self.activeRoisLayerComboBox.textActivated.connect(lambda x: self.setSelectedRoiIndex())
+        self.setSelectedRoisLayer()
+    
+    def currentFrameIndex(self) -> int:
+        try:
+            return viewer.dims.current_step[-3]
+        except IndexError:
+            return 0
+    
+    # EVENTS
+    
+    def onLayerInserted(self, event):
+        layer = event.value
+        index = event.index
+        # insert separately managed dict of layer metadata to reflect new layer
+        self._layerMetadata.insert(index, {})
+        layerMetadata = self._layerMetadata[index]
+        if self.isImageStackLayer(layer):
+            # create plot to show point z-projections for the new layer
+            plot = self.newPlot()
+            plot.setLabels(left=layer.name)
+            plot_data = plot.plot([], pen=pg.mkPen([98, 143, 176], width=1))
+            prevPlots = self.roiZProjectionPlots()
+            if len(prevPlots):
+                plot.setXLink(prevPlots[0])
+            t = self.currentFrameIndex()
+            plot_vline = plot.addLine(x=t, pen=pg.mkPen('y', width=1))
+            # store non-serializable Qt plot objects in separate layer metadata
+            layerMetadata['roi_zprojection_plot'] = plot
+            layerMetadata['roi_zprojection_plot_data'] = plot_data
+            layerMetadata['roi_zprojection_plot_vline'] = plot_vline
+            # insert plot into layout
+            plotIndex = self.imageStackLayers().index(layer)
+            self.roiZProjectionPlotsLayout.insertWidget(plotIndex, plot)
+            self.roiZProjectionPlotsLayout.setStretch(plotIndex, 1)
+            self.noVisibleImageStacksLabel.hide()
+        elif self.isRoisLayer(layer):
+            n_rois = len(layer.data)
+            # tags string feature for each ROI
+            if not 'tags' in layer.features:
+                layer.features['tags'] = [""] * n_rois
+        self.updateLayerSelectionBoxes()
+        # handle general events for new layer
+        layer.events.name.connect(self.onLayerNameChanged)
+        layer.events.visible.connect(self.onLayerVisibilityChanged)
+    
+    def onLayerRemoved(self, event):
+        layer = event.value
+        index = event.index
+        layerMetadata = self._layerMetadata.pop(index)
+        if 'roi_zprojection_plot' in layerMetadata:
+            # delete plot
+            plot = layerMetadata['roi_zprojection_plot']
+            self.roiZProjectionPlotsLayout.removeWidget(plot)
+            plot.deleteLater()
+            # reset plot linkage
+            self.linkRoiZProjectionPlots()
+        del layerMetadata
+        if self.isRoisLayer(layer):
+            # remove ROI z-projections for this layer from all image stack layers
+            for imlayer in self.imageStackLayers():
+                if 'roi_zprojections' in imlayer.metadata:
+                    if layer.name in imlayer.metadata['roi_zprojections']:
+                        del imlayer.metadata['roi_zprojections'][layer.name]
+        elif self.isImageStackLayer(layer):
+            visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
+            if len(visibleImageStackLayers) == 0:
+                self.noVisibleImageStacksLabel.show()
+        self.updateLayerSelectionBoxes()
+    
+    def onLayerMoved(self, event):
+        index = event.index
+        new_index = event.new_index
+        layerMetadata = self._layerMetadata.pop(index)
+        self._layerMetadata.insert(new_index, layerMetadata)
+        if 'roi_zprojection_plot' in layerMetadata:
+            # reposition plot to match layer order
+            plot = layerMetadata['roi_zprojection_plot']
+            self.roiZProjectionPlotsLayout.removeWidget(plot)
+            plotIndex = self.roiZProjectionPlots().index(plot)
+            self.roiZProjectionPlotsLayout.insertWidget(plotIndex, plot)
+            self.roiZProjectionPlotsLayout.setStretch(plotIndex, 1)
+        self.updateLayerSelectionBoxes()
+    
+    def onLayerNameChanged(self, event):
+        index = event.index
+        layer = self.viewer.layers[index]
+        layerMetadata = self._layerMetadata[index]
+        if 'roi_zprojection_plot' in layerMetadata:
+            # plot ylabel = layer name
+            plot = layerMetadata['roi_zprojection_plot']
+            plot.setLabels(left=layer.name)
+        if self.isRoisLayer(layer):
+            # update ROI z-projection dicts for all image stack layers to reflect new layer name
+            for imlayer in self.imageStackLayers():
+                if 'roi_zprojections' in imlayer.metadata:
+                    # event does not tell us what the previous layer name was, so we have to figure it out
+                    zproj_layer_names = imlayer.metadata['roi_zprojections'].keys()
+                    roi_layer_names = [layer.name for layer in self.roisLayers()]
+                    for name in zproj_layer_names:
+                        if name not in roi_layer_names:
+                            imlayer.metadata['roi_zprojections'][layer.name] = imlayer.metadata['roi_zprojections'].pop(name)
+                            break
+        self.updateLayerSelectionBoxes()
+    
+    def onLayerVisibilityChanged(self, event):
+        index = event.index
+        layer = self.viewer.layers[index]
+        layerMetadata = self._layerMetadata[index]
+        if 'roi_zprojection_plot' in layerMetadata:
+            # show/hide plot along with layer
+            plot = layerMetadata['roi_zprojection_plot']
+            plot.setVisible(layer.visible)
+        visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
+        if len(visibleImageStackLayers) == 0:
+            self.noVisibleImageStacksLabel.show()
+        else:
+            self.noVisibleImageStacksLabel.hide()
+    
+    def onDimStepChanged(self, event):
+        try:
+            t = event.value[-3]
+        except IndexError:
+            t = 0
+        for layerMetadata in self._layerMetadata:
+            # update frame vline in point z-projection plots
+            if 'roi_zprojection_plot_vline' in layerMetadata:
+                layerMetadata['roi_zprojection_plot_vline'].setValue(t)
+    
+    def onMouseClickedOrDragged(self, viewer, event):
+        # ignore initial mouse press event
+        if event.type == 'mouse_press':
+            yield
+        else:
+            return
+        
+        # if mouse dragged (beyond a tiny bit), ignore subsequent mouse release event
+        n_move_events = 0
+        while event.type == 'mouse_move':
+            n_move_events += 1
+            if n_move_events <= 3:
+                yield
+            else:
+                return
+        
+        # if we get here, then mouse was clicked without dragging (much)
+        if event.type == 'mouse_release':
+            mousePointInWorld = event.position[-2:]  # (row, col)
+            # check if clicked on a visible point or shape
+            visibleRoisLayers = [layer for layer in self.roisLayers() if layer.visible]
+            if len(visibleRoisLayers):
+                activeRoisLayer = self.selectedRoisLayer()
+                if activeRoisLayer in visibleRoisLayers:
+                    # check active points layer first
+                    visibleRoisLayers.remove(activeRoisLayer)
+                    visibleRoisLayers.insert(0, activeRoisLayer)
+                if self._selectedRoiLayer is not None:
+                    # ignore selected ROI layer
+                    visibleRoisLayers.remove(self._selectedRoiLayer)
+                for roiLayer in visibleRoisLayers:
+                    # Find closest ROI to mouse click.
+                    # If within ROI, then select the ROI.
+                    if len(roiLayer.data) == 0:
+                        continue
+                    mousePointInRoiLayer = self.transformPoints2dFromWorldToLayer(mousePointInWorld, roiLayer)
+                    if self.isPointsLayer(roiLayer):
+                        roiCentersInRoiLayer = roiLayer.data[:,-2:]
+                        roiSizes = roiLayer.size[:,-2:]
+                    elif self.isShapesLayer(roiLayer):
+                        shapesData = [data[:,-2:] for data in roiLayer.data]
+                        shapeTypes = roiLayer.shape_type
+                        roiCentersInRoiLayer = np.array([data.mean(axis=0) for data in shapesData])
+                        roiSizes = np.array([data.max(axis=0) - data.min(axis=0) for data in shapesData])
+                    squareDists = np.sum((roiCentersInRoiLayer - mousePointInRoiLayer)**2, axis=1)
+                    indexes = np.argsort(squareDists)
+                    for index in indexes:
+                        rowSize, colSize = roiSizes[index]
+                        drow, dcol = mousePointInRoiLayer[0] - roiCentersInRoiLayer[index]
+                        if self.isPointsLayer(roiLayer) or (shapeTypes[index] == "ellipse"):
+                            if drow**2 / (rowSize / 2)**2 + dcol**2 / (colSize / 2)**2 <= 1:
+                                self.setSelectedRoiIndex(index, roiLayer)
+                                return
+                        elif shapeTypes[index] == "rectangle":
+                            if (-rowSize / 2 <= drow <= rowSize / 2) and (-colSize / 2 <= dcol <= colSize / 2):
+                                self.setSelectedRoiIndex(index, roiLayer)
+                                return
+            # no point selected
+            self.roiIndexSpinBox.clear()
+            self.roiTagsEdit.setText("")
+            for roiLayer in self.roisLayers():
+                roiLayer._selected_data = set()
+                roiLayer._highlight_index = []
+                roiLayer.events.highlight()
+            # z-project clicked location
+            # if self.viewer.grid.enabled:
+            #     # find layer grid that was clicked in
+            #     # and use the grid relative coords as the ROI world position
+            #     # TODO
+            #     mousePointInGrid = self.UNUSED_transformPoint2dFromWorldToGrid(mousePointInWorld)
+            #     self.updateSelectedRoiLayer(roiWorldPoint=mousePointInGrid)
+            # else:
+            self.updateSelectedRoiLayer(roiWorldPoint=mousePointInWorld)
+            self.zprojectRoisInImageLayers(self._selectedRoiLayer)
+            row, col = np.round(mousePointInWorld).astype(int)
+            self.currentRoiWorldPositionLabel.setText(f"[{row},{col}]")
+    
+    def onMouseDoubleClicked(self, viewer, event):
+        self.viewer.reset_view()
+    
+    # I/O
     
     def exportSession(self, filename=None, writeImageStackData=False):
         """ Export data to MATLAB .mat file.
@@ -568,9 +994,15 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 if 'image' not in layerDict:
                     layerDict['metadata']['image_shape'] = layer.data.shape
                     layerDict['metadata']['image_dtype'] = str(layer.data.dtype)
-            elif self.isPointsLayer(layer):
-                # points layer
-                layerDict['points'] = layer.data
+            elif self.isRoisLayer(layer):
+                # ROIs layer
+                if self.isPointsLayer(layer):
+                    layerDict['points'] = layer.data
+                    layerDict['size'] = layer.size
+                    layerDict['symbol'] = layer.symbol
+                elif self.isShapesLayer(layer):
+                    layerDict['shapes'] = layer.data
+                    layerDict['shape_type'] = layer.shape_type
                 if not layer.features.empty:
                     layerDict['features'] = {}
                     for key in layer.features:
@@ -586,13 +1018,12 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 layerDict['gamma'] = layer.gamma
                 layerDict['colormap'] = layer.colormap.name
                 layerDict['interpolation2d'] = layer.interpolation2d
-            if self.isPointsLayer(layer):
-                layerDict['size'] = layer.size
-                layerDict['symbol'] = layer.symbol
+            elif self.isRoisLayer(layer):
                 layerDict['face_color'] = layer.face_color
                 layerDict['edge_color'] = layer.edge_color
                 layerDict['edge_width'] = layer.edge_width
-                layerDict['edge_width_is_relative'] = layer.edge_width_is_relative
+                if self.isPointsLayer(layer):
+                    layerDict['edge_width_is_relative'] = layer.edge_width_is_relative
             for key in layer.metadata:
                 if key in ["image_file_abspath", "image_file_relpath"]:
                     continue
@@ -632,23 +1063,36 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                         ('image_file_relpath' in layerDict['metadata']) \
                         or ('image_file_abspath' in layerDict['metadata']) \
                         or ('image_shape' in layerDict['metadata'])))
-                    if 'points' in layerDict:
-                        # points layer
-                        points = layerDict['points']
-                        features = pd.DataFrame()
+                    isPointsLayer = 'points' in layerDict
+                    isShapesLayer = 'shapes' in layerDict
+                    isRoisLayer = isPointsLayer or isShapesLayer
+                    if isRoisLayer:
+                        # ROIs layer
+                        face_color = layerDict['face_color']
+                        edge_color = layerDict['edge_color']
+                        edge_width = layerDict['edge_width']
+                        if isPointsLayer:
+                            points = layerDict['points']
+                            size = layerDict['size']
+                            symbol = str(layerDict['symbol'])
+                            edge_width_is_relative = layerDict['edge_width_is_relative']
+                            layer = self.viewer.add_points(points, symbol=symbol, size=size, name=layerName, 
+                                affine=affine, opacity=opacity, blending=blending, 
+                                face_color=face_color, edge_color=edge_color, edge_width=edge_width, edge_width_is_relative=edge_width_is_relative)
+                        elif isShapesLayer:
+                            shapes = layerDict['shapes']
+                            shape_type = [str(shape_type) for shape_type in layerDict['shape_type']]
+                            layer = self.viewer.add_shapes(shapes, shape_type=shape_type, name=layerName, 
+                                affine=affine, opacity=opacity, blending=blending, 
+                                face_color=face_color, edge_color=edge_color, edge_width=edge_width)
+                        n_rois = len(layer.data)
+                        features = pd.DataFrame({"tags": [""] * n_rois})
                         if 'features' in layerDict:
                             for key in layerDict['features']:
                                 features[key] = layerDict['features'][key]
                                 if key == "tags":
                                     features['tags'].replace(" ", "", inplace=True)
-                        size = layerDict['size']
-                        symbol = str(layerDict['symbol'])
-                        face_color = layerDict['face_color']
-                        edge_color = layerDict['edge_color']
-                        edge_width = layerDict['edge_width']
-                        edge_width_is_relative = layerDict['edge_width_is_relative']
-                        self.viewer.add_points(points, name=layerName, features=features, affine=affine, opacity=opacity, blending=blending, 
-                            size=size, symbol=symbol, face_color=face_color, edge_color=edge_color, edge_width=edge_width, edge_width_is_relative=edge_width_is_relative)
+                        layer.features = features
                     elif isImageLayer:
                         # image layer
                         imageAbsPath = None
@@ -761,6 +1205,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
         return layer
     
+    # LAYERS
+    
     def imageLayers(self):
         return [layer for layer in reversed(self.viewer.layers) if self.isImageLayer(layer)]
     
@@ -769,6 +1215,12 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     
     def pointsLayers(self):
         return [layer for layer in reversed(self.viewer.layers) if self.isPointsLayer(layer)]
+    
+    def shapesLayers(self):
+        return [layer for layer in reversed(self.viewer.layers) if self.isShapesLayer(layer)]
+    
+    def roisLayers(self):
+        return [layer for layer in reversed(self.viewer.layers) if self.isRoisLayer(layer)]
     
     def isImageLayer(self, layer) -> bool:
         return type(layer) is napari.layers.image.image.Image
@@ -779,231 +1231,598 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     def isPointsLayer(self, layer) -> bool:
         return type(layer) is napari.layers.points.points.Points
     
-    def pointZProjectionPlots(self):
-        return [data['point_zprojection_plot'] for data in reversed(self.layerMetadata) if 'point_zprojection_plot' in data]
+    def isShapesLayer(self, layer) -> bool:
+        return type(layer) is napari.layers.shapes.shapes.Shapes
     
-    def linkPointZProjectionPlots(self):
-        plots = self.pointZProjectionPlots()
-        for i in range(1, len(plots)):
-            plots[i].setXLink(plots[0])
+    def isRoisLayer(self, layer) -> bool:
+        return self.isShapesLayer(layer) or self.isPointsLayer(layer)
     
-    def clearPointZProjectionPlots(self):
-        for layerMetadata in self.layerMetadata:
-            if 'point_zprojection_plot_data' in layerMetadata:
-                layerMetadata['point_zprojection_plot_data'].setData([])
+    def deleteLayer(self, layer):
+        layerIndex = list(self.viewer.layers).index(layer)
+        del self.viewer.layers[layerIndex]
     
-    def newPlot(self) -> pg.PlotWidget:
-        plot = pg.PlotWidget()
-        plot.getAxis('left').setWidth(82)
-        plot.getAxis('right').setWidth(10)
-        plot.showGrid(x=True, y=True, alpha=0.3)
-        # plot.setBackground([38, 41, 48])
-        # hack to stop grid from clipping axis tick labels
-        for key in ['left', 'bottom']:
-            plot.getAxis(key).setGrid(False)
-        for key in ['right', 'top']:
-            plot.getAxis(key).setStyle(showValues=False)
-            plot.showAxis(key)
-        return plot
+    def applyToAllLayers(self, func, *args, **kwargs):
+        layers = list(self.viewer.layers)
+        for layer in layers:
+            func(layer, *args, **kwargs)
     
-    def currentFrameIndex(self) -> int:
-        try:
-            return viewer.dims.current_step[-3]
-        except IndexError:
-            return 0
+    def applyToSelectedLayers(self, func, *args, **kwargs):
+        layers = list(self.viewer.layers.selection)
+        for layer in layers:
+            func(layer, *args, **kwargs)
     
-    def onLayerInserted(self, event):
-        layer = event.value
-        index = event.index
-        # insert separately managed dict of layer metadata to reflect new layer
-        self.layerMetadata.insert(index, {})
-        layerMetadata = self.layerMetadata[index]
-        if self.isImageStackLayer(layer):
-            # create plot to show point z-projections for the new layer
-            plot = self.newPlot()
-            plot.setLabels(left=layer.name)
-            plot_data = plot.plot([], pen=pg.mkPen([98, 143, 176], width=1))
-            prevPlots = self.pointZProjectionPlots()
-            if len(prevPlots):
-                plot.setXLink(prevPlots[0])
-            t = self.currentFrameIndex()
-            plot_vline = plot.addLine(x=t, pen=pg.mkPen('y', width=1))
-            # store non-serializable Qt plot objects in separate layer metadata
-            layerMetadata['point_zprojection_plot'] = plot
-            layerMetadata['point_zprojection_plot_data'] = plot_data
-            layerMetadata['point_zprojection_plot_vline'] = plot_vline
-            # insert plot into layout
-            plotIndex = self.imageStackLayers().index(layer)
-            self.zprojPlotLayout.insertWidget(plotIndex, plot)
-            self.zprojPlotLayout.setStretch(plotIndex, 1)
-            self.zprojNoVisibleImageStacksLabel.hide()
+    # TRANSFORMS
+    
+    def layerToWorldTransform3x3(self, layer):
+        return layer.affine.inverse.affine_matrix[-3:,-3:]
+    
+    def worldToLayerTransform3x3(self, layer):
+        return layer.affine.affine_matrix[-3:,-3:]
+    
+    def transformPoints2dFromLayerToWorld(self, points2d, layer):
+        points2d = np.array(points2d).reshape([-1, 2])
+        if layer.ndim == 2:
+            pointsNd = points2d
+        else:
+            n_points = points2d.shape[0]
+            pointsNd = np.zeros([n_points, layer.ndim])
+            pointsNd[:,-2:] = points2d
+        worldPoints2d = np.zeros(points2d.shape)
+        for i, point in enumerate(points2d):
+            worldPoints2d[i] = layer.data_to_world(point)[-2:]
+        return worldPoints2d
+
+    def transformPoints2dFromWorldToLayer(self, worldPoints2d, layer):
+        worldPoints2d = np.array(worldPoints2d).reshape([-1, 2])
+        if layer.ndim == 2:
+            worldPointsNd = worldPoints2d
+        else:
+            n_points = worldPoints2d.shape[0]
+            worldPointsNd = np.zeros([n_points, layer.ndim])
+            worldPointsNd[:,-2:] = worldPoints2d
+        points2d = np.zeros(worldPoints2d.shape)
+        for i, worldPoint in enumerate(worldPointsNd):
+            points2d[i] = layer.world_to_data(worldPoint)[-2:]
+        return points2d
+    
+    def getLayerWorldBoundingBox(self, layer):
+        if self.isImageLayer(layer):
+            w, h = layer.data.shape[-2:]
+            layerPoints = np.array([[0, 0], [w, 0], [w, h], [0, h]])
         elif self.isPointsLayer(layer):
-            n_points = len(layer.data)
-            # tags string feature for each point
-            if not 'tags' in layer.features:
-                layer.features['tags'] = [""] * n_points
-        self.updateLayerSelectionBoxes()
-        # handle general events for new layer
-        layer.events.name.connect(self.onLayerNameChanged)
-        layer.events.visible.connect(self.onLayerVisibilityChanged)
-    
-    def onLayerRemoved(self, event):
-        layer = event.value
-        index = event.index
-        layerMetadata = self.layerMetadata.pop(index)
-        if 'point_zprojection_plot' in layerMetadata:
-            # delete plot
-            plot = layerMetadata['point_zprojection_plot']
-            self.zprojPlotLayout.removeWidget(plot)
-            plot.deleteLater()
-            # reset plot linkage
-            self.linkPointZProjectionPlots()
-        del layerMetadata
-        if self.isPointsLayer(layer):
-            # remove point z-projections for this layer from all image stack layers
-            for imlayer in self.imageStackLayers():
-                if 'point_zprojections' in imlayer.metadata:
-                    if layer.name in imlayer.metadata['point_zprojections']:
-                        del imlayer.metadata['point_zprojections'][layer.name]
+            layerPoints = layer.data[:,-2:]
+        elif self.isShapesLayer(layer):
+            layerPoints = np.array([data[:,-2:] for data in layer.data])
         else:
-            visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
-            if len(visibleImageStackLayers) == 0:
-                self.zprojNoVisibleImageStacksLabel.show()
-        self.updateLayerSelectionBoxes()
+            return None
+        worldPoints = self.transformPoints2dFromLayerToWorld(layerPoints, layer)
+        worldRowLim = worldPoints[:,0].min(), worldPoints[:,0].max()
+        worldColLim = worldPoints[:,1].min(), worldPoints[:,1].max()
+        return worldRowLim, worldColLim
     
-    def onLayerMoved(self, event):
-        index = event.index
-        new_index = event.new_index
-        layerMetadata = self.layerMetadata.pop(index)
-        self.layerMetadata.insert(new_index, layerMetadata)
-        if 'point_zprojection_plot' in layerMetadata:
-            # reposition plot to match layer order
-            plot = layerMetadata['point_zprojection_plot']
-            self.zprojPlotLayout.removeWidget(plot)
-            plotIndex = self.pointZProjectionPlots().index(plot)
-            self.zprojPlotLayout.insertWidget(plotIndex, plot)
-            self.zprojPlotLayout.setStretch(plotIndex, 1)
-        self.updateLayerSelectionBoxes()
+    # TODO: grid bounds not quite right?
+    def UNUSED_getLayerWorldGridBoxes(self):
+        n_layers = len(self.viewer.layers)
+        layerOrigins = np.zeros([n_layers, 2])
+        layerRowLims = np.zeros([n_layers, 2])
+        layerColLims = np.zeros([n_layers, 2])
+        for i, layer in enumerate(self.viewer.layers):
+            layerOrigins[i] = self.transformPoints2dFromLayerToWorld((0, 0), layer)
+            rowLim, colLim = self.getLayerWorldBoundingBox(layer)
+            layerRowLims[i] = rowLim
+            layerColLims[i] = colLim
+        rowOrigins = np.unique(layerOrigins[:,0])
+        colOrigins = np.unique(layerOrigins[:,1])
+        for rowOrigin in rowOrigins:
+            rowMask = layerOrigins[:,0] == rowOrigin
+            layerRowLims[rowMask,0] = layerRowLims[rowMask,0].min()
+            layerRowLims[rowMask,1] = layerRowLims[rowMask,1].max()
+        for colOrigin in colOrigins:
+            colMask = layerOrigins[:,1] == colOrigin
+            layerColLims[colMask,0] = layerColLims[colMask,0].min()
+            layerColLims[colMask,1] = layerColLims[colMask,1].max()
+        return layerRowLims, layerColLims
     
-    def onLayerNameChanged(self, event):
-        index = event.index
-        layer = self.viewer.layers[index]
-        layerMetadata = self.layerMetadata[index]
-        if 'point_zprojection_plot' in layerMetadata:
-            # plot ylabel = layer name
-            plot = layerMetadata['point_zprojection_plot']
-            plot.setLabels(left=layer.name)
-        if self.isPointsLayer(layer):
-            # update point z-projection dicts for all image stack layers to reflect new layer name
-            for imlayer in self.imageStackLayers():
-                if 'point_zprojections' in imlayer.metadata:
-                    # event does not tell us what the previous layer name was, so we have to figure it out
-                    zproj_layer_names = imlayer.metadata['point_zprojections'].keys()
-                    points_layer_names = [layer.name for layer in self.pointsLayers()]
-                    for name in zproj_layer_names:
-                        if name not in points_layer_names:
-                            imlayer.metadata['point_zprojections'][layer.name] = imlayer.metadata['point_zprojections'].pop(name)
-                            break
-        self.updateLayerSelectionBoxes()
+    def UNUSED_getIndexOfLayerWhoseGridContainsWorldPoint2d(self, worldPoint2d):
+        worldPoint2d = np.array(worldPoint2d).reshape([-1])
+        layerRowLims, layerColLims = self.UNUSED_getLayerWorldGridBoxes()
+        row, col = worldPoint2d
+        indexOfLayerContainingWorldPoint = \
+            np.where((layerRowLims[:,0] <= row) & (layerRowLims[:,1] > row) \
+            & (layerColLims[:,0] <= col) & (layerColLims[:,1] > col))[0][0]
+        return indexOfLayerContainingWorldPoint
     
-    def onLayerVisibilityChanged(self, event):
-        index = event.index
-        layer = self.viewer.layers[index]
-        layerMetadata = self.layerMetadata[index]
-        if 'point_zprojection_plot' in layerMetadata:
-            # show/hide plot along with layer
-            plot = layerMetadata['point_zprojection_plot']
-            plot.setVisible(layer.visible)
-        visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
-        if len(visibleImageStackLayers) == 0:
-            self.zprojNoVisibleImageStacksLabel.show()
-        else:
-            self.zprojNoVisibleImageStacksLabel.hide()
+    def UNUSED_transformPoint2dFromWorldToGrid(self, worldPoint2d):
+        worldPoint2d = np.array(worldPoint2d).reshape([-1])
+        layerRowLims, layerColLims = self.UNUSED_getLayerWorldGridBoxes()
+        row, col = worldPoint2d
+        indexOfLayerContainingWorldPoint = \
+            np.where((layerRowLims[:,0] <= row) & (layerRowLims[:,1] > row) \
+            & (layerColLims[:,0] <= col) & (layerColLims[:,1] > col))[0][0]
+        gridRowOrigin = layerRowLims[indexOfLayerContainingWorldPoint,0]
+        gridColOrigin = layerColLims[indexOfLayerContainingWorldPoint,0]
+        return np.array([[row - gridRowOrigin, col - gridColOrigin]])
     
-    def onDimStepChanged(self, event):
+    # ROIS
+    
+    def selectedRoisLayer(self):
+        if len(self.roisLayers()) == 0:
+            return None
+        if self.activeRoisLayerComboBox.count() == 0:
+            return None
+        layerName = self.activeRoisLayerComboBox.currentText()
         try:
-            t = event.value[-3]
-        except IndexError:
-            t = 0
-        for layerMetadata in self.layerMetadata:
-            # update frame vline in point z-projection plots
-            if 'point_zprojection_plot_vline' in layerMetadata:
-                layerMetadata['point_zprojection_plot_vline'].setValue(t)
+            layer = self.viewer.layers[layerName]
+        except KeyError:
+            return None
+        return layer
     
-    def onMouseClickedOrDragged(self, viewer, event):
-        if event.type == 'mouse_press':
-            worldPoint = event.position[-2:]  # (row, col)
-            # check if clicked on a visible point
-            visiblePointsLayers = [layer for layer in self.pointsLayers() if layer.visible]
-            if len(visiblePointsLayers):
-                activePointsLayer = self.activePointsLayer()
-                if activePointsLayer in visiblePointsLayers:
-                    # check active points layer first
-                    visiblePointsLayers.remove(activePointsLayer)
-                    visiblePointsLayers.insert(0, activePointsLayer)
-                for layer in visiblePointsLayers:
-                    if layer.data.size == 0:
-                        continue
-                    # Find closest point to mouse click.
-                    # If within point, then select the point.
-                    worldPoints = self.transformPointsFromLayerToWorld(layer.data, layer)
-                    squareDists = np.sum((worldPoints - worldPoint)**2, axis=1)
-                    index = np.argmin(squareDists)
-                    radius = layer.size[index].mean() / 2
-                    if squareDists[index] <= radius**2:
-                        self.setSelectedPointIndex(index, layer)
-                        return
-            # no point selected
-            self.zprojPointIndexSpinBox.clear()
-            self.zprojPointTagsEdit.setText("")
-            for layer in self.pointsLayers():
-                layer._selected_data = set()
-                layer._highlight_index = []
-                layer.events.highlight()
-            # z-project clicked location (use default point size)
-            pointMask = self.getPointMask(self.defaultPointSize)
-            self.zprojectWorldPoint(worldPoint, pointMask=pointMask)
+    def setSelectedRoisLayer(self, roisLayer=None):
+        # no highlighted points in any other layer
+        for layer in self.roisLayers():
+            layer._selected_data = set()
+            layer._highlight_index = []
+            layer.events.highlight()
+        if self.isRoisLayer(roisLayer):
+            self.activeRoisLayerComboBox.setCurrentText(roisLayer.name)
+            n_rois = self.numRois(roisLayer)
+            n_filteredRois = self.numFilteredRois(roisLayer)
+            self.numSelectedRoisLabel.setText(f"{n_filteredRois}/{n_rois} ROIs")
+        else:
+            self.numSelectedRoisLabel.setText("")
     
-    def onMouseDoubleClicked(self, viewer, event):
-        self.viewer.reset_view()
+    def selectedRoiIndex(self):
+        if self.selectedRoisLayer() is None:
+            return None
+        if self.roiIndexSpinBox.cleanText() == "":
+            return None
+        return self.roiIndexSpinBox.value()
     
-    def updateLayerSelectionBoxes(self):
-        # layer registration
-        fixedLayerName = self.fixedLayerComboBox.currentText()
-        movingLayerName = self.movingLayerComboBox.currentText()
-        self.fixedLayerComboBox.clear()
-        self.movingLayerComboBox.clear()
-        for layer in reversed(self.viewer.layers):
-            self.fixedLayerComboBox.addItem(layer.name)
-            self.movingLayerComboBox.addItem(layer.name)
-        self.fixedLayerComboBox.setCurrentText(fixedLayerName)
-        self.movingLayerComboBox.setCurrentText(movingLayerName)
-        # layer point colocalization
-        self.colocPointsLayerComboBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
-        self.colocNeighborsLayerComboBox.currentTextChanged.disconnect(self.updatePointsColocalizationPlot)
-        pointsLayerName = self.colocPointsLayerComboBox.currentText()
-        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
-        self.colocPointsLayerComboBox.clear()
-        self.colocNeighborsLayerComboBox.clear()
-        for layer in self.pointsLayers():
-            self.colocPointsLayerComboBox.addItem(layer.name)
-            self.colocNeighborsLayerComboBox.addItem(layer.name)
-        self.colocPointsLayerComboBox.setCurrentText(pointsLayerName)
-        self.colocNeighborsLayerComboBox.setCurrentText(neighborsLayerName)
-        self.colocPointsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-        self.colocNeighborsLayerComboBox.currentTextChanged.connect(self.updatePointsColocalizationPlot)
-        self.updatePointsColocalizationPlot()
-        # layer point z-projections
-        self.zprojPointsLayerComboBox.currentTextChanged.disconnect()
-        pointsLayerName = self.zprojPointsLayerComboBox.currentText()
-        self.zprojPointsLayerComboBox.clear()
-        for layer in self.pointsLayers():
-            self.zprojPointsLayerComboBox.addItem(layer.name)
-        self.zprojPointsLayerComboBox.setCurrentText(pointsLayerName)
-        self.zprojPointsLayerComboBox.currentTextChanged.connect(lambda x: self.setActivePointsLayer())
-        self.setActivePointsLayer()
+    def setSelectedRoiIndex(self, roiIndex=None, roisLayer=None):
+        if roisLayer is None:
+            roisLayer = self.selectedRoisLayer()
+        if self.isRoisLayer(roisLayer):
+            self.setSelectedRoisLayer(roisLayer)
+        else:
+            roisLayer = None
+        if roisLayer is not None:
+            n_rois = len(roisLayer.data)
+            if roiIndex is None:
+                roiIndex = self.selectedRoiIndex()
+            if roiIndex is not None:
+                roiIndex = min(max(0, roiIndex), n_rois - 1)
+            if self.roiTagFilterCheckBox.isChecked():
+                roiIndex = self.filterRoiIndex(roisLayer, roiIndex)
+        
+        if (roisLayer is None) or (roiIndex is None):
+            # deselect all ROIs
+            self.roiIndexSpinBox.clear()
+            self.currentRoiWorldPositionLabel.setText("")
+            self.roiTagsEdit.setText("")
+            self._roiIndex = None
+
+            # no highlighted ROIs
+            if roisLayer is not None:
+                roisLayer._selected_data = set()
+                roisLayer._highlight_index = []
+                roisLayer.events.highlight()
+
+            # clear all ROI z-projection plots
+            self.clearRoiZProjectionPlots()
+
+            # done
+            return
+
+        # select ROI
+        self.roiIndexSpinBox.setValue(roiIndex)
+        try:
+            tags = roisLayer.features['tags'][roiIndex]
+            try:
+                tags = tags.strip()
+                self.roiTagsEdit.setText(tags)
+            except AttributeError:
+                roisLayer.features['tags'][roiIndex] = ""
+                self.roiTagsEdit.setText("")
+        except (KeyError, IndexError):
+            self.roiTagsEdit.setText("")
+        self._roiIndex = roiIndex
+        
+        # highlight selected ROI
+        roisLayer._selected_data = set([roiIndex])
+        roisLayer._highlight_index = [roiIndex]
+        roisLayer.events.highlight()
+        
+        # update selected ROI layer
+        self.updateSelectedRoiLayer(roisLayer, roiIndex)
+
+        # z-project image stacks for selected ROI
+        self.zprojectRoisInImageLayers(roisLayer, roiIndex)
+    
+    def updateSelectedRoiTags(self):
+        layer = self.selectedRoisLayer()
+        if layer is not None:
+            index = self.selectedRoiIndex()
+            if index is not None:
+                tags = self.roiTagsEdit.text().strip()
+                if not 'tags' in layer.features:
+                    n_rois = len(layer.data)
+                    layer.features['tags'] = [""] * n_rois
+                layer.features['tags'][index] = tags
+    
+    def filterRoiIndex(self, roisLayer, roiIndex, tagFilter=None):
+        if (roisLayer is None) or not self.isRoisLayer(roisLayer):
+            return None
+        if tagFilter is None:
+            tagFilter = self.roiTagFilterEdit.text()
+        roisLayer.features['tags'].fillna("", inplace=True)
+        n_rois = len(roisLayer.data)
+        roiIndex = min(max(0, roiIndex), n_rois - 1)
+        if tagFilter.strip() == "":
+            return roiIndex
+        tags = roisLayer.features['tags'][roiIndex]
+        if self.checkIfTagsMatchFilter(tags, tagFilter):
+            return roiIndex
+        if (roiIndex + 1 < n_rois) and ((self._roiIndex is None) or (self._roiIndex <= roiIndex)):
+            # find next match
+            for i in range(roiIndex + 1, n_rois):
+                tags = roisLayer.features['tags'][i]
+                if self.checkIfTagsMatchFilter(tags, tagFilter):
+                    return i
+        if (roiIndex > 0) and ((self._roiIndex is None) or (self._roiIndex >= roiIndex)):
+            # find previous match
+            for i in reversed(range(roiIndex)):
+                tags = roisLayer.features['tags'][i]
+                if self.checkIfTagsMatchFilter(tags, tagFilter):
+                    return i
+        # if didn't find anything, search ahead and behind irrespective of self._roiIndex
+        if roiIndex + 1 < n_rois:
+            # find next match
+            for i in range(roiIndex + 1, n_rois):
+                tags = roisLayer.features['tags'][i]
+                if self.checkIfTagsMatchFilter(tags, tagFilter):
+                    return i
+        if roiIndex > 0:
+            # find previous match
+            for i in reversed(range(roiIndex)):
+                tags = roisLayer.features['tags'][i]
+                if self.checkIfTagsMatchFilter(tags, tagFilter):
+                    return i
+        return None
+    
+    def checkIfTagsMatchFilter(self, tags, filter):
+        tags = [tag.strip() for tag in tags.split(",")]
+        or_tags = [tag.strip() for tag in filter.split(",")]
+        for or_tag in or_tags:
+            and_tags = [tag.strip() for tag in or_tag.split("&")]
+            and_matches = [tag in tags for tag in and_tags]
+            if np.all(and_matches):
+                return True
+        return False
+    
+    def numRois(self, roisLayer=None):
+        if roisLayer is None:
+            roisLayer = self.selectedRoisLayer()
+        if not self.isRoisLayer(roisLayer):
+            return 0
+        return len(roisLayer.data)
+    
+    def numFilteredRois(self, roisLayer=None, tagFilter=None):
+        if roisLayer is None:
+            roisLayer = self.selectedRoisLayer()
+        if not self.isRoisLayer(roisLayer):
+            return 0
+        n_rois = self.numRois(roisLayer)
+        if not self.roiTagFilterCheckBox.isChecked():
+            return n_rois
+        if tagFilter is None:
+            tagFilter = self.roiTagFilterEdit.text()
+        if tagFilter.strip() == "":
+            return n_rois
+        n_filteredRois = 0
+        for i in range(n_rois):
+            tags = roisLayer.features['tags'][i]
+            if self.checkIfTagsMatchFilter(tags, tagFilter):
+                n_filteredRois += 1
+        return n_filteredRois
+    
+    def addRoisLayer(self, center, size=None, shape_type=None, affine=np.eye(3), features=None, name="ROIs", 
+    edge_width=None, edge_color=None, face_color=None, blending="translucent_no_depth", opacity=1, isSelectedRoisLayer=False):
+        if shape_type is None:
+            shape_type = self.roiShapeComboBox.currentText()
+        if size is None:
+            size = self.roiSizeSpinBox.value()
+        if edge_width is None:
+            if isSelectedRoisLayer:
+                edge_width = self.selectedRoiEdgeWidthSpinBox.value()
+            else:
+                edge_width = self.roiEdgeWidthSpinBox.value()
+        if edge_color is None:
+            if isSelectedRoisLayer:
+                edge_color = strToRgba(self.selectedRoiEdgeColorEdit.text())
+            else:
+                edge_color = strToRgba(self.roiEdgeColorEdit.text())
+        if face_color is None:
+            if isSelectedRoisLayer:
+                face_color = [0]*4
+            else:
+                face_color = strToRgba(self.roiFaceColorEdit.text())
+        if features is None:
+            n_rois = len(center)
+            features = pd.DataFrame({"tags": [""] * n_rois})
+        if isSelectedRoisLayer and (self._selectedRoiLayer is not None):
+            self.deleteLayer(self._selectedRoiLayer)
+            self._selectedRoiLayer = None
+        if shape_type == "point":
+            roisLayer = self.viewer.add_points(center, size=size, affine=affine, features=features, name=name, 
+                edge_width=edge_width, edge_width_is_relative=False, 
+                edge_color=edge_color, face_color=face_color, blending=blending, opacity=opacity)
+        else:
+            data = self.getRoisShapeData(center, size)
+            roisLayer = self.viewer.add_shapes(data, shape_type=shape_type, affine=affine, features=features, name=name, 
+                edge_width=edge_width, edge_color=edge_color, face_color=face_color, blending=blending, opacity=opacity)
+        if isSelectedRoisLayer:
+            self._selectedRoiLayer = roisLayer
+        return roisLayer
+    
+    def updateRoisLayer(self, roisLayer, shape_type=None, size=None, edge_width=None, edge_color=None, face_color=None):
+        if (roisLayer is None) or not self.isRoisLayer(roisLayer):
+            return
+        if shape_type is None:
+            shape_type = self.roiShapeComboBox.currentText()
+        if size is None:
+            size = self.roiSizeSpinBox.value()
+        if edge_width is None:
+            if roisLayer is self._selectedRoiLayer:
+                edge_width = self.selectedRoiEdgeWidthSpinBox.value()
+            else:
+                edge_width = self.roiEdgeWidthSpinBox.value()
+        if edge_color is None:
+            if roisLayer is self._selectedRoiLayer:
+                edge_color = strToRgba(self.selectedRoiEdgeColorEdit.text())
+            else:
+                edge_color = strToRgba(self.roiEdgeColorEdit.text())
+        if face_color is None:
+            if roisLayer is self._selectedRoiLayer:
+                face_color = [0]*4
+            else:
+                face_color = strToRgba(self.roiFaceColorEdit.text())
+        if shape_type == "point" and self.isShapesLayer(roisLayer):
+            roisLayer = self.convertShapesLayerToPointsLayer(roisLayer)
+        elif shape_type != "point" and self.isPointsLayer(roisLayer):
+            roisLayer = self.convertPointsLayerToShapesLayer(roisLayer)
+        elif shape_type == "point":
+            roisLayer.size = size
+            roisLayer.edge_width_is_relative = False
+        else:
+            roiCenters = self.getRoiCenters2d(roisLayer)
+            roiData = self.getRoisShapeData(roiCenters, size)
+            roisLayer.data = roiData
+            roisLayer.shape_type = [shape_type] * len(roiData)
+        roisLayer.edge_width = edge_width
+        roisLayer.edge_color = edge_color
+        roisLayer.face_color = face_color
+    
+    def updateSelectedRoiLayer(self, roisLayer=None, roiIndex=None, roiWorldPoint=None):
+        if roiWorldPoint is not None:
+            # default ROI at world point
+            roiShapeType = self.roiShapeComboBox.currentText()
+            roiSize = self.roiSizeSpinBox.value()
+            if roiShapeType == "point":
+                roiData = roiWorldPoint
+            else:
+                roiData = roiWorldPoint + np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]]) * (roiSize / 2)
+            roiLayerTransform = np.eye(3)
+        elif (roisLayer is not None) and (roiIndex is not None):
+            # selected ROI
+            if self.isPointsLayer(roisLayer):
+                roiShapeType = "point"
+                roiData = roisLayer.data[roiIndex,-2:]
+                roiSize = roisLayer.size[roiIndex,-2:]
+            elif self.isShapesLayer(roisLayer):
+                roiShapeType = roisLayer.shape_type[roiIndex]
+                roiData = roisLayer.data[roiIndex][:,-2:]
+            else:
+                return
+            roiLayerTransform = roisLayer.affine
+        else:
+            # delete selected ROI layer
+            self.deleteLayer(self._selectedRoiLayer)
+            self._selectedRoiLayer = None
+            return
+        roiEdgeWidth = self.selectedRoiEdgeWidthSpinBox.value()
+        roiEdgeColor = strToRgba(self.selectedRoiEdgeColorEdit.text())
+        roiFaceColor = [0]*4
+        
+        # delete selected ROI layer if it is the wrong layer type
+        if self._selectedRoiLayer is not None:
+            if ((roiShapeType == "point") and not self.isPointsLayer(self._selectedRoiLayer)) \
+                or ((roiShapeType != "point") and self.isPointsLayer(self._selectedRoiLayer)):
+                self.deleteLayer(self._selectedRoiLayer)
+                self._selectedRoiLayer = None
+        
+        if self._selectedRoiLayer is None:
+            # add selected ROI layer
+            if roiShapeType == "point":
+                self._selectedRoiLayer = self.viewer.add_points(roiData, name="selected ROI", 
+                    size=roiSize, edge_width=roiEdgeWidth, edge_width_is_relative=False,
+                    edge_color=roiEdgeColor, face_color=roiFaceColor, 
+                    affine=roiLayerTransform)
+            else:
+                self._selectedRoiLayer = self.viewer.add_shapes([roiData], name="selected ROI", 
+                    shape_type=[roiShapeType], edge_width=roiEdgeWidth, 
+                    edge_color=roiEdgeColor, face_color=roiFaceColor, 
+                    affine=roiLayerTransform)
+        else:
+            # edit selected ROI layer
+            if roiShapeType == "point":
+                self._selectedRoiLayer.data = roiData
+                self._selectedRoiLayer.size = roiSize
+            else:
+                self._selectedRoiLayer.data = [roiData]
+                self._selectedRoiLayer.shape_type = [roiShapeType]
+            self._selectedRoiLayer.edge_width = roiEdgeWidth
+            self._selectedRoiLayer.edge_color = roiEdgeColor
+            self._selectedRoiLayer.face_color = roiFaceColor
+            self._selectedRoiLayer.affine = roiLayerTransform
+    
+    def getRoiCenters2d(self, roisLayer):
+        if self.isPointsLayer(roisLayer):
+            return roisLayer.data[:,-2:]
+        elif self.isShapesLayer(roisLayer):
+            return np.array([data[:,-2:].mean(axis=0) for data in roisLayer.data])
+    
+    def getRoiSizes2d(self, roisLayer):
+        if self.isPointsLayer(roisLayer):
+            return roisLayer.size[:,-2:]
+        elif self.isShapesLayer(roisLayer):
+            return np.array([data[:,-2:].max(axis=0) - data[:,-2:].min(axis=0) for data in roisLayer.data])
+    
+    def getRoiShapeTypes(self, roisLayer):
+        if self.isPointsLayer(roisLayer):
+            return ["point"] * len(roisLayer.data)
+        elif self.isShapesLayer(roisLayer):
+            return roisLayer.shape_type
+    
+    def getRoisShapeData(self, roiCenters, roiSizes):
+        roiCenters = np.array(roiCenters).reshape([-1,2])
+        if isinstance(roiSizes, np.ndarray) and (roiCenters.shape == roiSizes.shape):
+            _roiSizes = roiSizes
+        else:
+            _roiSizes = np.zeros(roiCenters.shape)
+            _roiSizes[:] = roiSizes
+        normBox = np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]]) / 2
+        return [center + normBox * size for (center, size) in zip(roiCenters, _roiSizes)]
+    
+    def convertPointsLayerToShapesLayer(self, pointsLayer, roiShapeType=None):
+        roiCenters = self.getRoiCenters2d(pointsLayer)
+        roiSizes = self.getRoiSizes2d(pointsLayer)
+        roiShapeData = self.getRoisShapeData(roiCenters, roiSizes)
+        if roiShapeType is not None:
+            roiShapeTypes = [roiShapeType] * len(roiShapeData)
+        else:
+            roiShapeTypes = ["ellipse"] * len(roiShapeData)
+        roiLayerName = pointsLayer.name
+        shapesLayer = self.viewer.add_shapes(roiShapeData, shape_type=roiShapeTypes, 
+            name=pointsLayer.name, affine=pointsLayer.affine, features=pointsLayer.features, 
+            edge_width=pointsLayer.edge_width, 
+            edge_color=pointsLayer.edge_color, face_color=pointsLayer.face_color, 
+            blending=pointsLayer.blending, opacity=pointsLayer.opacity)
+        # move shapes layer to points layer
+        shapesLayerIndex = list(self.viewer.layers).index(shapesLayer)
+        pointsLayerIndex = list(self.viewer.layers).index(pointsLayer)
+        self.viewer.layers.move(shapesLayerIndex, pointsLayerIndex)
+        # delete points layer
+        pointsLayerIndex = list(self.viewer.layers).index(pointsLayer)
+        del self.viewer.layers[pointsLayerIndex]
+        # update shapes layer name
+        shapesLayer.name = roiLayerName
+        return shapesLayer
+    
+    def convertShapesLayerToPointsLayer(self, shapesLayer):
+        roiCenters = self.getRoiCenters2d(shapesLayer)
+        roiSizes = self.getRoiSizes2d(shapesLayer)
+        roiLayerName = shapesLayer.name
+        pointsLayer = self.viewer.add_points(roiCenters, size=roiSizes, 
+            name=shapesLayer.name, affine=shapesLayer.affine, features=shapesLayer.features, 
+            edge_width=shapesLayer.edge_width, edge_width_is_relative=False, 
+            edge_color=shapesLayer.edge_color, face_color=shapesLayer.face_color, 
+            blending=shapesLayer.blending, opacity=shapesLayer.opacity)
+        # move points layer to shapes layer
+        pointsLayerIndex = list(self.viewer.layers).index(shapesLayer)
+        shapesLayerIndex = list(self.viewer.layers).index(shapesLayer)
+        self.viewer.layers.move(pointsLayerIndex, shapesLayerIndex)
+        # delete shapes layer
+        shapesLayerIndex = list(self.viewer.layers).index(shapesLayer)
+        del self.viewer.layers[shapesLayerIndex]
+        # update points layer name
+        pointsLayer.name = roiLayerName
+        return pointsLayer
+    
+    def findPeakRoisInImageLayer(self, layer, minPeakHeight=None, minPeakSeparation=None):
+        if not self.isImageLayer(layer):
+            return
+        if minPeakHeight is None:
+            minPeakHeight = self.minPeakHeightSpinBox.value()
+        if minPeakSeparation is None:
+            minPeakSeparation = self.minPeakSeparationSpinBox.value()
+        if self.isImageStackLayer(layer):
+            t = self.currentFrameIndex()
+            image = layer.data[t]
+        else:
+            image = layer.data
+        points = findPeaksInImage(image, minPeakHeight=minPeakHeight, minPeakSeparation=minPeakSeparation)
+        n_points = len(points)
+        name = layer.name + " peaks"
+        tform = self.worldToLayerTransform3x3(layer)
+        features = pd.DataFrame({"tags": [""] * n_points})
+        roiShapeType = self.roiShapeComboBox.currentText()
+        roiSize = self.roiSizeSpinBox.value()
+        roiEdgeWidth = self.roiEdgeWidthSpinBox.value()
+        roiEdgeColor = strToRgba(self.roiEdgeColorEdit.text())
+        roiFaceColor = strToRgba(self.roiFaceColorEdit.text())
+        if roiShapeType == "point":
+            return self.viewer.add_points(points, name=name, affine=tform, features=features, 
+                size=roiSize, edge_width=roiEdgeWidth, edge_color=roiEdgeColor, edge_width_is_relative=False, 
+                face_color=roiFaceColor, blending='translucent_no_depth', opacity=1)
+        else:
+            shapes = [point + np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]]) * (roiSize / 2) for point in points]
+            shapeTypes = [roiShapeType] * n_points
+            return self.viewer.add_shapes(shapes, shape_type=shapeTypes, name=name, affine=tform, features=features, 
+                edge_width=roiEdgeWidth, edge_color=roiEdgeColor, face_color=roiFaceColor, blending='translucent_no_depth', opacity=1)
+    
+    def zprojectRoisInImageLayers(self, roisLayer, roiIndices=None, imageLayers=None):
+        if not self.isRoisLayer(roisLayer):
+            return
+        roiCenters = self.getRoiCenters2d(roisLayer)
+        roiSizes = self.getRoiSizes2d(roisLayer)
+        roiShapeTypes = self.getRoiShapeTypes(roisLayer)
+        if roiIndices is not None:
+            roiCenters = roiCenters[roiIndices,:]
+            roiSizes = roiSizes[roiIndices,:]
+            roiShapeTypes = roiShapeTypes[roiIndices]
+        n_rois = len(roiCenters)
+        roiCentersInWorld = self.transformPoints2dFromLayerToWorld(roiCenters, roisLayer)
+        # if self.viewer.grid.enabled:
+        #     # get world centers relative to the layer's grid origin
+        #     layerGridRowLims, layerGridColLims = self.getLayerWorldGridBoxes()
+        #     roisLayerIndex = list(self.viewer.layers).index(roisLayer)
+        #     roisLayerGridOrigin = np.array([layerGridRowLims[roisLayerIndex,0], layerGridColLims[roisLayerIndex,0]]).reshape([-1,2])
+        #     roiCentersInGrid = roiCentersInWorld - roisLayerGridOrigin
+        if imageLayers is None:
+            imageLayers = self.imageStackLayers()
+        for imageLayer in imageLayers:
+            if not self.isImageLayer(imageLayer):
+                continue
+            # if self.viewer.grid.enabled:
+            #     imageLayerIndex = list(self.viewer.layers).index(imageLayer)
+            #     imageLayerGridOrigin = np.array([layerGridRowLims[imageLayerIndex,0], layerGridColLims[imageLayerIndex,0]]).reshape([-1,2])
+            #     roiCentersInImageLayer = self.transformPoints2dFromWorldToLayer(imageLayerGridOrigin + roiCentersInGrid, imageLayer)
+            # else:
+            roiCentersInImageLayer = self.transformPoints2dFromWorldToLayer(roiCentersInWorld, imageLayer)
+            roiZProjections = np.zeros([n_rois] + list(imageLayer.data.shape[:-2]))
+            for i in range(n_rois):
+                try:
+                    roiMask = getRoiMask(roiSizes[i], roiShapeTypes[i])
+                    roiZProjections[i] = zprojectRoiInImage(imageLayer.data, roiCentersInImageLayer[i], roiMask)
+                except:
+                    # ROI not in image
+                    pass
+            # show z-projection of first ROI
+            imageLayerIndex = list(self.viewer.layers).index(imageLayer)
+            self._layerMetadata[imageLayerIndex]['roi_zprojection_plot_data'].setData(roiZProjections[0])
+            # indicate world position of displayed ROI z-projection
+            row, col = np.round(roiCentersInWorld[0]).astype(int)
+            self.currentRoiWorldPositionLabel.setText(f"[{row},{col}]")
+            # store z-projections in image layer metadata (only if all ROIs included ==> roiIndices is None)
+            if roiIndices is None:
+                if 'roi_zprojections' not in imageLayer.metadata:
+                    imageLayer.metadata['roi_zprojections'] = {}
+                imageLayer.metadata['roi_zprojections'][roisLayer.name] = roiZProjections
+    
+    # LAYER REGISTRATION
     
     def registerLayers(self, fixedLayer=None, movingLayer=None, transformType=None):
+        # TODO: register shapes/points layers
         if fixedLayer is None:
             fixedLayerName = self.fixedLayerComboBox.currentText()
             fixedLayer = self.viewer.layers[fixedLayerName]
@@ -1011,7 +1830,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             movingLayerName = self.movingLayerComboBox.currentText()
             movingLayer = self.viewer.layers[movingLayerName]
         if transformType is None:
-            transformType = self.layerRegTransformTypeComboBox.currentText()
+            transformType = self.layerRegistrationTransformTypeComboBox.currentText()
         if fixedLayer is movingLayer:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
@@ -1094,319 +1913,21 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             if len(layers) == 0:
                 return
             layer = layers[0]
-        self.layerTransformCopy = self.layerToWorldTransform3x3(layer)
+        self._layerTransformCopy = self.layerToWorldTransform3x3(layer)
     
     def pasteCopiedLayerTransform(self, layer):
-        layer.affine = self.layerTransformCopy
+        layer.affine = self._layerTransformCopy
     
     def clearLayerTransform(self, layer):
         layer.affine = np.eye(3)
     
-    def layerToWorldTransform3x3(self, layer):
-        return layer.affine.inverse.affine_matrix[-3:,-3:]
-    
-    def worldToLayerTransform3x3(self, layer):
-        return layer.affine.affine_matrix[-3:,-3:]
-    
-    def transformPointsFromLayerToWorld(self, points, layer):
-        points = np.array(points).reshape([-1, 2])
-        worldPoints = np.zeros(points.shape)
-        for i, point in enumerate(points):
-            if layer.ndim > 2:
-                # add first index (0) of preceding dimensions (e.g., frames)
-                point = tuple([0]*(layer.ndim - 2) + [*point])
-            worldPoints[i] = layer.data_to_world(point)[-2:]
-        return worldPoints
-
-    def transformPointsFromWorldToLayer(self, worldPoints, layer):
-        worldPoints = np.array(worldPoints).reshape([-1, 2])
-        points = np.zeros(worldPoints.shape)
-        for i, worldPoint in enumerate(worldPoints):
-            if layer.ndim > 2:
-                # add first index (0) of preceding dimensions (e.g., frames)
-                worldPoint = tuple([0]*(layer.ndim - 2) + [*worldPoint])
-            points[i] = layer.world_to_data(worldPoint)[-2:]
-        return points
-    
-    def getLayerWorldBoundingBox(self, layer):
-        if self.isImageLayer(layer):
-            w, h = layer.data.shape[-2:]
-            layerPoints = np.array([[0, 0], [w, 0], [w, h], [0, h]])
-        elif self.isPointsLayer(layer):
-            layerPoints = layer.data
-        else:
-            return None
-        worldPoints = self.transformPointsFromLayerToWorld(layerPoints, layer)
-        worldRowLim = worldPoints[:,0].min(), worldPoints[:,0].max()
-        worldColLim = worldPoints[:,1].min(), worldPoints[:,1].max()
-        return worldRowLim, worldColLim
-    
-    def getLayerWorldGridBoxes(self):
-        n_layers = len(self.viewer.layers)
-        layerOrigins = np.zeros([n_layers, 2])
-        layerRowLims = np.zeros([n_layers, 2])
-        layerColLims = np.zeros([n_layers, 2])
-        for i, layer in enumerate(self.viewer.layers):
-            layerOrigins[i] = self.transformPointsFromLayerToWorld((0, 0), layer)
-            rowLim, colLim = self.getLayerWorldBoundingBox(layer)
-            layerRowLims[i] = rowLim
-            layerColLims[i] = colLim
-        rowOrigins = np.unique(layerOrigins[:,0])
-        colOrigins = np.unique(layerOrigins[:,1])
-        for rowOrigin in rowOrigins:
-            rowMask = layerOrigins[:,0] == rowOrigin
-            layerRowLims[rowMask,0] = layerRowLims[rowMask,0].min()
-            layerRowLims[rowMask,1] = layerRowLims[rowMask,1].max()
-        for colOrigin in colOrigins:
-            colMask = layerOrigins[:,1] == colOrigin
-            layerColLims[colMask,0] = layerColLims[colMask,0].min()
-            layerColLims[colMask,1] = layerColLims[colMask,1].max()
-        return layerRowLims, layerColLims
-    
-    def activePointsLayer(self):
-        if len(self.pointsLayers()) == 0:
-            return None
-        if self.zprojPointsLayerComboBox.count() == 0:
-            return None
-        layerName = self.zprojPointsLayerComboBox.currentText()
-        try:
-            layer = self.viewer.layers[layerName]
-        except KeyError:
-            return None
-        return layer
-    
-    def setActivePointsLayer(self, layer=None):
-        # no highlighted points in any other layer
-        for ptslayer in self.pointsLayers():
-            ptslayer._selected_data = set()
-            ptslayer._highlight_index = []
-            ptslayer.events.highlight()
-        if layer is None:
-            layer = self.activePointsLayer()
-        elif self.isPointsLayer(layer):
-            self.zprojPointsLayerComboBox.setCurrentText(layer.name)
-        else:
-            layer = None
-        if layer is not None and layer.data.size > 0:
-            n_points = layer.data.shape[0]
-        else:
-            n_points = 0
-        self.zprojNumPointsLabel.setText(f"{n_points}/{n_points} Points")
-        if n_points > 0 and self.selectedPointIndex() is not None:
-            self.setSelectedPointIndex()
-    
-    def selectedPointIndex(self):
-        if self.activePointsLayer() is None:
-            return None
-        if self.zprojPointIndexSpinBox.cleanText() == "":
-            return None
-        return self.zprojPointIndexSpinBox.value()
-    
-    def setSelectedPointIndex(self, index=None):
-        layer = self.activePointsLayer()
-
-        if layer is not None:
-            n_points = layer.data.shape[0]
-        else:
-            n_points = 0
-        
-        if index is None:
-            index = self.selectedPointIndex()
-        
-        if index is None or index < 0 or layer is None or n_points == 0:
-            # deselect all points
-            self.zprojPointIndexSpinBox.clear()
-            self.zprojPointWorldPositionLabel.setText("")
-            self.zprojPointTagsEdit.setText("")
-
-            # no highlighted points
-            if layer is not None:
-                layer._selected_data = set()
-                layer._highlight_index = []
-                layer.events.highlight()
-
-            # clear all z-projection plots
-            self.clearPointZProjectionPlots()
-
-            # done
-            self.pointIndex = None
-            return
-        
-        # tags filter?
-        layer.features['tags'].fillna("", inplace=True)
-        if self.zprojPointTagFilterCheckBox.isChecked():
-            index = min(max(0, index), n_points - 1)
-            filter = self.zprojPointTagFilterEdit.text()
-            if (self.pointIndex is None) or (self.pointIndex <= index):
-                # incrementing point index
-                while index < n_points:
-                    tags = layer.features['tags'][index]
-                    if self.checkIfTagsMatchFilter(tags, filter):
-                        break
-                    index += 1
-                if index == n_points:
-                    # no matches found
-                    if self.pointIndex is None:
-                        self.zprojPointIndexSpinBox.clear()
-                    else:
-                        self.zprojPointIndexSpinBox.setValue(self.pointIndex)
-                    return
-            else:
-                # decrementing point index
-                while index >= 0:
-                    tags = layer.features['tags'][index]
-                    if self.checkIfTagsMatchFilter(tags, filter):
-                        break
-                    index -= 1
-                if index < 0:
-                    # no matches found
-                    if self.pointIndex is None:
-                        self.zprojPointIndexSpinBox.clear()
-                    else:
-                        self.zprojPointIndexSpinBox.setValue(self.pointIndex)
-                    return
-
-        # select point in layer
-        index = min(max(0, index), n_points - 1)
-        self.zprojPointIndexSpinBox.setValue(index)
-        self.pointIndex = index
-        try:
-            tags = layer.features['tags'][index]
-            try:
-                tags = tags.strip()
-                self.zprojPointTagsEdit.setText(tags)
-            except AttributeError:
-                layer.features['tags'][index] = ""
-                self.zprojPointTagsEdit.setText("")
-        except (KeyError, IndexError):
-            self.zprojPointTagsEdit.setText("")
-        
-        # highlight selected point
-        layer._selected_data = set([index])
-        layer._highlight_index = [index]
-        layer.events.highlight()
-        
-        # z-project image stacks at selected world point row, col)
-        point = layer.data[index]
-        worldPoint = layer.data_to_world(point)
-        pointMask = self.getPointMask(layer.size[index])
-        self.zprojectWorldPoint(worldPoint, pointMask=pointMask)
-    
-    def updateSelectedPointTags(self):
-        layer = self.activePointsLayer()
-        if layer is not None:
-            index = self.selectedPointIndex()
-            if index is not None:
-                tags = self.zprojPointTagsEdit.text().strip()
-                if not 'tags' in layer.features:
-                    n_points = len(layer.data)
-                    layer.features['tags'] = [""] * n_points
-                layer.features['tags'][index] = tags
-    
-    def checkIfTagsMatchFilter(self, tags, filter):
-        tags = [tag.strip() for tag in tags.split(",")]
-        or_tags = [tag.strip() for tag in filter.split(",")]
-        for or_tag in or_tags:
-            and_tags = [tag.strip() for tag in or_tag.split("&")]
-            and_matches = [tag in tags for tag in and_tags]
-            if np.all(and_matches):
-                return True
-        return False
-    
-    def getPointMask(self, pointSize):
-        try:
-            n_rows, n_cols = pointSize
-        except:
-            n_rows = pointSize
-            n_cols = n_rows
-        rows = np.reshape(np.arange(n_rows, dtype=float), [-1, 1])
-        rows -= rows.mean()
-        cols = np.reshape(np.arange(n_cols, dtype=float), [1, -1])
-        cols -= cols.mean()
-        pointMask = rows**2 / (n_rows / 2)**2  + cols**2 / (n_cols / 2)**2 < 1
-        return pointMask
-    
-    def zprojectWorldPointInImageStackLayer(self, layer, worldPoint, pointMask=None) -> np.ndarray:
-        if not self.isImageStackLayer(layer):
-            return np.array([])
-        # transform world point into image pixels (row, col)
-        # extra point coord is 0th frame
-        imagePoint = layer.world_to_data((0, *worldPoint))[-2:]
-        # z-project point in image stack
-        zproj = zprojectPointInImageStack(layer.data, imagePoint, pointMask=pointMask)
-        return zproj
-    
-    def zprojectWorldPoint(self, worldPoint, pointMask=None):
-        if self.viewer.grid.enabled:
-            # find ofset of world point from origin of grid box it is within
-            layerRowLims, layerColLims = self.getLayerWorldGridBoxes()
-            row, col = worldPoint
-            indexOfLayerContainingWorldPoint = \
-                np.where((layerRowLims[:,0] <= row) & (layerRowLims[:,1] > row) \
-                & (layerColLims[:,0] <= col) & (layerColLims[:,1] > col))[0][0]
-            gridRowOffset = row - layerRowLims[indexOfLayerContainingWorldPoint,0]
-            gridColOffset = col - layerColLims[indexOfLayerContainingWorldPoint,0]
-        for layer in self.imageStackLayers():
-            layerIndex = list(self.viewer.layers).index(layer)
-            if self.viewer.grid.enabled:
-                # use offset from layer's grid box instead of world point
-                row = layerRowLims[layerIndex,0] + gridRowOffset
-                col = layerColLims[layerIndex,0] + gridColOffset
-                shiftedWorldPoint = (row, col)
-                zproj = self.zprojectWorldPointInImageStackLayer(layer, shiftedWorldPoint, pointMask=pointMask)
-            else:
-                zproj = self.zprojectWorldPointInImageStackLayer(layer, worldPoint, pointMask=pointMask)
-            # update z-projection plot
-            self.layerMetadata[layerIndex]['point_zprojection_plot_data'].setData(zproj)
-        # show actual world point location in UI regardless of whether or not grid view is enabled
-        row, col = worldPoint
-        self.zprojPointWorldPositionLabel.setText(f"[{int(row)}, {int(col)}]")
-    
-    def zprojectPointsLayer(self, layer, pointMask=None):
-        if not self.isPointsLayer(layer):
-            return
-        n_points = layer.data.shape[0]
-        # transform points to world coords
-        worldPoints = self.transformPointsFromLayerToWorld(layer.data, layer)
-        if self.viewer.grid.enabled:
-            # remove grid shift to get points relative to the layer's grid origin
-            layerRowLims, layerColLims = self.getLayerWorldGridBoxes()
-            layerIndex = list(self.viewer.layers).index(layer)
-            layerGridShift = np.array([layerRowLims[layerIndex,0], layerColLims[layerIndex,0]])
-            gridPoints = worldPoints - layerGridShift
-        # z-project points in all image stack layers
-        for imlayer in self.imageStackLayers():
-            n_frames = imlayer.data.shape[0]
-            zprojs = np.zeros((n_points, n_frames))
-            if self.viewer.grid.enabled:
-                # add grid shift to the points that are relative to the grid origin
-                layerIndex = list(self.viewer.layers).index(layer)
-                layerGridShift = np.array([layerRowLims[layerIndex,0], layerColLims[layerIndex,0]])
-                shiftedPoints = gridPoints + layerGridShift
-            for i in range(n_points):
-                if pointMask is None:
-                    # set point mask based on point size
-                    thisPointMask = self.getPointMask(layer.size[i])
-                else:
-                    thisPointMask = pointMask
-                try:
-                    if self.viewer.grid.enabled:
-                        zprojs[i] = self.zprojectWorldPointInImageStackLayer(imlayer, shiftedPoints[i], pointMask=thisPointMask)
-                    else:
-                        zprojs[i] = self.zprojectWorldPointInImageStackLayer(imlayer, worldPoints[i], pointMask=thisPointMask)
-                except:
-                    # in case point not on image
-                    pass
-            # store z-projections in image stack layer
-            if 'point_zprojections' not in imlayer.metadata:
-                imlayer.metadata['point_zprojections'] = {}
-            imlayer.metadata['point_zprojections'][layer.name] = zprojs
+    # IMAGE PROCESSING
     
     def zprojectImageLayer(self, layer, method=None, frames=None):
         if not self.isImageStackLayer(layer):
             return
         if method is None:
-            method = self.zprojectOperationComboBox.currentText()
+            method = self.zprojectImageOperationComboBox.currentText()
         methods = {"max": np.max, "min": np.min, "std": np.std, "sum": np.sum, "mean": np.mean, "median": np.median}
         func = methods[method]
         n_frames = layer.data.shape[0]
@@ -1545,7 +2066,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 topleft_layer.metadata['subimage_slice'] = startstop
             return topleft_layer, topright_layer, bottomleft_layer, bottomright_layer
     
-    def cropImageLayer(self, layer, cropSlice=None):
+    def sliceImageLayer(self, layer, cropSlice=None):
         if not self.isImageStackLayer(layer):
             return
         bounds = np.hstack([
@@ -1553,7 +2074,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             np.array(layer.data.shape, dtype=int).reshape([-1,1])
             ])
         if cropSlice is None:
-            cropSlice = self.cropImageSliceEdit.text().strip()
+            cropSlice = self.sliceImageEdit.text().strip()
             if cropSlice == "":
                 return
         if type(cropSlice) is str:
@@ -1636,7 +2157,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if not self.isImageLayer(layer):
             return
         if sigma is None:
-            sigma = self.gaussianSigmaSpinBox.value()
+            sigma = self.gaussianFilterSigmaSpinBox.value()
         if self.isImageStackLayer(layer):
             # default is to not blur together images in stack
             if type(sigma) is float:
@@ -1654,7 +2175,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         if not self.isImageLayer(layer):
             return
         if diskRadius is None:
-            diskRadius = self.tophatDiskRadiusSpinBox.value()
+            diskRadius = self.tophatFilterDiskRadiusSpinBox.value()
         disk = morphology.disk(diskRadius)
         if self.isImageStackLayer(layer):
             filtered = np.empty(layer.data.shape)
@@ -1667,73 +2188,56 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         tform = self.worldToLayerTransform3x3(layer)
         return self.viewer.add_image(filtered, name=name, affine=tform, blending=layer.blending, colormap=layer.colormap)
 
-    def findPeaksInImageLayer(self, layer, minPeakHeight=None, minPeakSeparation=None):
-        if not self.isImageLayer(layer):
-            return
-        if minPeakHeight is None:
-            minPeakHeight = self.minPeakHeightSpinBox.value()
-        if minPeakSeparation is None:
-            minPeakSeparation = self.minPeakSeparationSpinBox.value()
-        if self.isImageStackLayer(layer):
-            t = self.currentFrameIndex()
-            image = layer.data[t]
-        else:
-            image = layer.data
-        points = findPeaksInImage(image, minPeakHeight=minPeakHeight, minPeakSeparation=minPeakSeparation)
-        n_points = len(points)
-        name = layer.name + " peaks"
-        tform = self.worldToLayerTransform3x3(layer)
-        features = pd.DataFrame({"tags": [""] * n_points})
-        return self.viewer.add_points(points, name=name, affine=tform, features=features, 
-            size=self.defaultPointSize, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
-            face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
+    # ROI COLOCALIZATION
     
-    def visualizeColocalizationOfPointsLayers(self, pointsLayer, neighborsLayer, bins=30):
-        if neighborsLayer is pointsLayer:
+    def visualizeColocalizationOfRoisLayers(self, roisLayer, neighborsLayer, bins=30):
+        if neighborsLayer is roisLayer:
             neighborsLayer = None
-        if not pointsLayer is None:
-            points = self.transformPointsFromLayerToWorld(pointsLayer.data, pointsLayer)
-            pointsNNs = distance.squareform(distance.pdist(points))
-            np.fill_diagonal(pointsNNs, np.inf)
-            pointsNNs = np.min(pointsNNs, axis=1)
+        if roisLayer is not None:
+            roiCenters = self.getRoiCenters2d(roisLayer)
+            roiCentersInWorld = self.transformPoints2dFromLayerToWorld(roiCenters, roisLayer)
+            roisNNs = distance.squareform(distance.pdist(roiCentersInWorld))
+            np.fill_diagonal(roisNNs, np.inf)
+            roisNNs = np.min(roisNNs, axis=1)
         if not neighborsLayer is None:
-            neighbors = self.transformPointsFromLayerToWorld(neighborsLayer.data, neighborsLayer)
-            neighborsNNs = distance.squareform(distance.pdist(neighbors))
+            neighborCenters = self.getRoiCenters2d(neighborsLayer)
+            neighborCentersInWorld = self.transformPoints2dFromLayerToWorld(neighborCenters, neighborsLayer)
+            neighborsNNs = distance.squareform(distance.pdist(neighborCentersInWorld))
             np.fill_diagonal(neighborsNNs, np.inf)
             neighborsNNs = np.min(neighborsNNs, axis=1)
-        if (not pointsLayer is None) and (not neighborsLayer is None):
-            withinLayerNNs = np.concatenate([pointsNNs, neighborsNNs])
+        if (roisLayer is not None) and (neighborsLayer is not None):
+            withinLayerNNs = np.concatenate([roisNNs, neighborsNNs])
             counts, bin_edges = np.histogram(withinLayerNNs, bins=bins)
-            self.withinLayersNearestNeighborsHistogram.setData(bin_edges, counts)
-            betweenLayerNNs = np.min(np.linalg.norm(points[:, None, :] - neighbors[None, :, :], axis=-1), axis=1)
+            self.withinRoiLayersNearestNeighborsHistogram.setData(bin_edges, counts)
+            betweenLayerNNs = np.min(np.linalg.norm(roiCentersInWorld[:, None, :] - neighborCentersInWorld[None, :, :], axis=-1), axis=1)
             counts, bin_edges = np.histogram(betweenLayerNNs, bins=bins)
-            self.betweenLayersNearestNeighborsHistogram.setData(bin_edges, counts)
-        elif not pointsLayer is None:
-            counts, bin_edges = np.histogram(pointsNNs, bins=bins)
-            self.withinLayersNearestNeighborsHistogram.setData(bin_edges, counts)
-            self.betweenLayersNearestNeighborsHistogram.setData([0, 0], [0])
-        elif not neighborsLayer is None:
+            self.betweenRoiLayersNearestNeighborsHistogram.setData(bin_edges, counts)
+        elif roisLayer is not None:
+            counts, bin_edges = np.histogram(roisNNs, bins=bins)
+            self.withinRoiLayersNearestNeighborsHistogram.setData(bin_edges, counts)
+            self.betweenRoiLayersNearestNeighborsHistogram.setData([0, 0], [0])
+        elif neighborsLayer is not None:
             counts, bin_edges = np.histogram(neighborsNNs, bins=bins)
-            self.withinLayersNearestNeighborsHistogram.setData(bin_edges, counts)
-            self.betweenLayersNearestNeighborsHistogram.setData([0, 0], [0])
+            self.withinRoiLayersNearestNeighborsHistogram.setData(bin_edges, counts)
+            self.betweenRoiLayersNearestNeighborsHistogram.setData([0, 0], [0])
         else:
-            self.withinLayersNearestNeighborsHistogram.setData([0, 0], [0])
-            self.betweenLayersNearestNeighborsHistogram.setData([0, 0], [0])
+            self.withinRoiLayersNearestNeighborsHistogram.setData([0, 0], [0])
+            self.betweenRoiLayersNearestNeighborsHistogram.setData([0, 0], [0])
     
-    def updatePointsColocalizationPlot(self):
-        pointsLayerName = self.colocPointsLayerComboBox.currentText()
-        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
+    def updateRoisColocalizationPlot(self):
+        roisLayerName = self.colocalizeRoisLayerComboBox.currentText()
+        neighborsLayerName = self.colocalizeNeighborsLayerComboBox.currentText()
         try:
-            pointsLayer = self.viewer.layers[pointsLayerName]
+            roisLayer = self.viewer.layers[roisLayerName]
         except KeyError:
-            pointsLayer = None
+            roisLayer = None
         try:
             neighborsLayer = self.viewer.layers[neighborsLayerName]
         except KeyError:
             neighborsLayer = None
-        self.visualizeColocalizationOfPointsLayers(pointsLayer, neighborsLayer)
+        self.visualizeColocalizationOfRoisLayers(roisLayer, neighborsLayer)
     
-    def findColocalizedPoints(self):
+    def findColocalizedRois(self):
         if self.viewer.grid.enabled:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
@@ -1741,88 +2245,53 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
             return
-        pointsLayerName = self.colocPointsLayerComboBox.currentText()
-        neighborsLayerName = self.colocNeighborsLayerComboBox.currentText()
+        roisLayerName = self.colocalizeRoisLayerComboBox.currentText()
+        neighborsLayerName = self.colocalizeNeighborsLayerComboBox.currentText()
         try:
-            pointsLayer = self.viewer.layers[pointsLayerName]
+            roisLayer = self.viewer.layers[roisLayerName]
         except KeyError:
-            pointsLayer = None
+            roisLayer = None
         try:
             neighborsLayer = self.viewer.layers[neighborsLayerName]
         except KeyError:
             neighborsLayer = None
-        if neighborsLayer is pointsLayer:
+        if neighborsLayer is roisLayer:
             neighborsLayer = None
-        if (pointsLayer is None) or (neighborsLayer is None):
+        if (roisLayer is None) or (neighborsLayer is None):
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setText("Select two points layers for colocalization.")
             msg.setStandardButtons(QMessageBox.Close)
             msg.exec_()
             return
-        points = self.transformPointsFromLayerToWorld(pointsLayer.data, pointsLayer)
-        neighbors = self.transformPointsFromLayerToWorld(neighborsLayer.data, neighborsLayer)
-        pdists = np.linalg.norm(points[:, None, :] - neighbors[None, :, :], axis=-1)
-        pointsNearestNeighborsDists = pdists.min(axis=1)
+        roiCenters = self.getRoiCenters2d(roisLayer)
+        roiCentersInWorld = self.transformPoints2dFromLayerToWorld(roiCenters, roisLayer)
+        neighborCenters = self.getRoiCenters2d(neighborsLayer)
+        neighborCentersInWorld = self.transformPoints2dFromLayerToWorld(neighborCenters, neighborsLayer)
+        pdists = np.linalg.norm(roiCentersInWorld[:, None, :] - neighborCentersInWorld[None, :, :], axis=-1)
+        roisNearestNeighborsDists = pdists.min(axis=1)
         # neighborsNearestPointsDists = pdists.min(axis=0)
-        pointsNearestNeighborsIndexes = pdists.argmin(axis=1)
-        neighborsNearestPointsIndexes = pdists.argmin(axis=0)
-        colocalizedPointNeighborIndexes = []
-        cutoff = self.colocNearestNeighborCutoffSpinBox.value()
-        for i in range(len(points)):
-            j = pointsNearestNeighborsIndexes[i]
-            if neighborsNearestPointsIndexes[j] == i:
-                if pointsNearestNeighborsDists[i] <= cutoff:
-                    colocalizedPointNeighborIndexes.append([i, j])
-        colocalizedPointNeighborIndexes = np.array(colocalizedPointNeighborIndexes, dtype=int)
-        colocalizedPointIndexes = colocalizedPointNeighborIndexes[:,0]
-        colocalizedNeighborIndexes = colocalizedPointNeighborIndexes[:,1]
-        colocalizedPoints = np.reshape(points[colocalizedPointIndexes], [-1, 2])
-        colocalizedNeighbors = np.reshape(neighbors[colocalizedNeighborIndexes], [-1, 2])
-        colocalizedPoints = (colocalizedPoints + colocalizedNeighbors) / 2
-        colocalizedPoints = self.transformPointsFromWorldToLayer(colocalizedPoints, pointsLayer)
-        n_points = len(colocalizedPoints)
-        size = pointsLayer.size[colocalizedPointIndexes]
-        name = "colocalized " + pointsLayer.name + "-" + neighborsLayer.name
-        tform = self.worldToLayerTransform3x3(pointsLayer)
-        features = pd.DataFrame({"tags": [""] * n_points})
-        return self.viewer.add_points(colocalizedPoints, name=name, affine=tform, features=features, 
-            size=size, edge_width=1, edge_color='yellow', edge_width_is_relative=False, 
-            face_color=[0]*4, blending='translucent_no_depth', opacity=0.5)
-    
-    def setSelectedPointsLayersPointSize(self, pointSize=None):
-        layers = [layer for layer in list(self.viewer.layers.selection) if self.isPointsLayer(layer)]
-        if len(layers) == 0:
-            return
-        if pointSize is None:
-            pointSize, ok = QInputDialog().getDouble(self, "Selected Points Layers", "Point size:", 9, 0.1, 100, 1)
-            if not ok:
-                return
-        for layer in layers:
-            layer.size = pointSize
-    
-    def setSelectedPointsLayersEdgeWidth(self, edgeWidth=None):
-        layers = [layer for layer in list(self.viewer.layers.selection) if self.isPointsLayer(layer)]
-        if len(layers) == 0:
-            return
-        if edgeWidth is None:
-            edgeWidth, ok = QInputDialog().getDouble(self, "Selected Points Layers", "Edge width (pixels):", 1.0, 0.1, 100, 1)
-            if not ok:
-                return
-        for layer in layers:
-            layer.edge_width_is_relative = False
-            layer.edge_width = edgeWidth
-    
-    def applyToAllLayers(self, func, *args, **kwargs):
-        layers = list(self.viewer.layers)
-        for layer in layers:
-            func(layer, *args, **kwargs)
-    
-    def applyToSelectedLayers(self, func, *args, **kwargs):
-        layers = list(self.viewer.layers.selection)
-        for layer in layers:
-            func(layer, *args, **kwargs)
-    
+        roisNearestNeighborsIndexes = pdists.argmin(axis=1)
+        neighborsNearestRoisIndexes = pdists.argmin(axis=0)
+        colocalizedRoiAndNeighborIndexes = []
+        cutoff = self.colocalizeNearestNeighborCutoffSpinBox.value()
+        for i in range(len(roiCentersInWorld)):
+            j = roisNearestNeighborsIndexes[i]
+            if neighborsNearestRoisIndexes[j] == i:
+                if roisNearestNeighborsDists[i] <= cutoff:
+                    colocalizedRoiAndNeighborIndexes.append([i, j])
+        colocalizedRoiAndNeighborIndexes = np.array(colocalizedRoiAndNeighborIndexes, dtype=int)
+        colocalizedRoiIndexes = colocalizedRoiAndNeighborIndexes[:,0]
+        colocalizedNeighborIndexes = colocalizedRoiAndNeighborIndexes[:,1]
+        colocalizedRoiCentersInWorld = np.reshape(roiCentersInWorld[colocalizedRoiIndexes], [-1, 2])
+        colocalizedNeighborCentersInWorld = np.reshape(neighborCentersInWorld[colocalizedNeighborIndexes], [-1, 2])
+        colocalizedRoiCentersInWorld = (colocalizedRoiCentersInWorld + colocalizedNeighborCentersInWorld) / 2
+        colocalizedRoiCentersInRoisLayer = self.transformPoints2dFromWorldToLayer(colocalizedRoiCentersInWorld, roisLayer)
+        name = "colocalized " + roisLayer.name + "-" + neighborsLayer.name
+        return self.addRoisLayer(center=colocalizedRoiCentersInRoisLayer, name=name, affine=roisLayer.affine)
+
+
+# UTILITIES
 
 def normalizeImage(image, contrastLimits=None) -> np.ndarray:
     image = image.astype(float)
@@ -1868,24 +2337,32 @@ def findPeaksInImage(image, minPeakHeight=None, minPeakSeparation=2) -> np.ndarr
     return points
 
 
-def zprojectPointInImageStack(imageStack, point, pointMask=None) -> np.ndarray:
+def zprojectRoiInImage(image, roiCenter, roiMask=None) -> np.ndarray:
+    # image size
+    n_rows, n_cols = image.shape[-2:]
+
     # pixel (row, col) from subpixel float point
-    row, col = np.round(point).astype(int)
+    row, col = np.round(roiCenter).astype(int)
+
     # find overlap of point mask with image
-    n_rows, n_cols = imageStack.shape[-2:]
-    if pointMask is None or np.all(pointMask.shape == 1):
+    if (roiMask is None) or np.all(roiMask.shape == 1):
         # z-project single pixel
         if (0 <= row < n_rows) and (0 <= col < n_cols):
-            zproj = np.squeeze(imageStack[:,row,col])
+            if image.ndim == 2:
+                zproj = image[row,col]
+            elif image.ndim == 3:
+                zproj = np.squeeze(image[:,row,col])
+            else:
+                zproj = np.squeeze(image[...,row,col])
         else:
             zproj = np.array([])
     else:
         # z-project overlap between mask and image
-        n_mask_rows, n_mask_cols = pointMask.shape
+        n_mask_rows, n_mask_cols = roiMask.shape
         if n_mask_rows % 2 == 0:
             # even rows
             drows = n_mask_rows / 2
-            if point[0] >= row:
+            if roiCenter[0] >= row:
                 rows = np.arange(row - drows + 1, row + drows + 1, dtype=int)
             else:
                 rows = np.arange(row - drows, row + drows, dtype=int)
@@ -1896,7 +2373,7 @@ def zprojectPointInImageStack(imageStack, point, pointMask=None) -> np.ndarray:
         if n_mask_cols % 2 == 0:
             # even cols
             dcols = n_mask_cols / 2
-            if point[1] >= col:
+            if roiCenter[1] >= col:
                 cols = np.arange(col - dcols + 1, col + dcols + 1, dtype=int)
             else:
                 cols = np.arange(col - dcols, col + dcols, dtype=int)
@@ -1910,13 +2387,34 @@ def zprojectPointInImageStack(imageStack, point, pointMask=None) -> np.ndarray:
             rows = rows[rowsInImage]
             cols = cols[colsInImage]
             pointMaskInImage = np.reshape(rowsInImage, [-1, 1]) & np.reshape(colsInImage, [1, -1])
-            pointMask = np.reshape(pointMask[pointMaskInImage], [1, len(rows), len(cols)])
-            # zproj = np.squeeze(np.sum(imageStack[:,rows[0]:rows[-1]+1,cols[0]:cols[-1]+1] * pointMask, axis=(1, 2)))
-            zproj = np.squeeze(np.mean(imageStack[:,rows[0]:rows[-1]+1,cols[0]:cols[-1]+1] * pointMask, axis=(1, 2)))
+            roiMask = np.reshape(roiMask[pointMaskInImage], [1] * (image.ndim - 2) + [len(rows), len(cols)])
+            dim_starts = [0] * (image.ndim - 2) + [rows[0], cols[0]]
+            dim_stops = list(image.shape[:-2]) + [rows[-1] + 1, cols[-1] + 1]
+            pointMaskIndexer = tuple([slice(i,j) for (i,j) in zip(dim_starts, dim_stops)])
+            zproj = np.squeeze(np.mean(image[pointMaskIndexer] * roiMask, axis=(-2, -1)))
         else:
             zproj = np.array([])
     return zproj
 
+
+def getRoiMask(roiSize, roiShape="ellipse"):
+    try:
+        n_rows, n_cols = np.ceil(roiSize).astype(int)
+    except:
+        n_rows = np.ceil(roiSize).astype(int)
+        n_cols = n_rows
+    if roiShape in ["point", "ellipse"]:
+        rows = np.reshape(np.arange(n_rows, dtype=float), [-1, 1])
+        rows -= rows.mean()
+        cols = np.reshape(np.arange(n_cols, dtype=float), [1, -1])
+        cols -= cols.mean()
+        pointMask = rows**2 / (n_rows / 2)**2  + cols**2 / (n_cols / 2)**2 < 1
+        return pointMask
+    elif roiShape == "rectangle":
+        pointMask = np.ones([n_rows, n_cols]) > 0
+        return pointMask
+    return None
+    
     
 def printDictStructure(dic, start="", indent="\t"):
     for key, value in dic.items():
@@ -1935,6 +2433,55 @@ def printDictStructure(dic, start="", indent="\t"):
             except:
                 print(start, indent, key, '?')
 
+
+def strToRgba(color):
+    color = color.strip()
+    if color == "":
+        # transparent
+        return [0]*4
+    elif ',' in color:
+        rgb_or_rgba = [float(c) for c in color.split(',')]
+        return rgb_or_rgba + [1.0] * (4 - len(rgb_or_rgba))
+    else:
+        qcolor = QColor(color)
+        return [qcolor.redF(), qcolor.greenF(), qcolor.blueF(), qcolor.alphaF()]
+
+
+# def getComplementaryColor(rgb_or_rgba):
+#     r, g, b = rgb_or_rgba[:3]
+#     h, s, v = rgb_to_hsv(r, g, b)
+#     rgb_or_rgba[:3] = hsv_to_rgb((h + 0.5) % 1, s, v)
+#     return rgb_or_rgba
+
+
+# def array2qimage(array2d):
+#     array2d = array2d.astype(np.float32)
+#     array2d -= array2d.min()
+#     array2d /= array2d.max()
+#     array2d *= 255
+#     array2d[array2d > 255] = 255
+#     array2d[array2d < 0] = 0
+#     array2d = array2d.astype(np.uint8)
+#     height, width = array2d.shape
+#     bytes = array2d.tobytes()
+#     qimage = QImage(bytes, width, height, QImage.Format.Format_Grayscale8)
+#     return qimage
+
+
+# def array2qpixmap(array2d):
+#     qimage = array2qimage(array2d)
+#     qpixmap = QPixmap.fromImage(qimage)
+#     return qpixmap
+
+
+def clearQLayout(layout):
+    while layout.count():
+        child = layout.takeAt(0)
+        if child.widget():
+            child.widget().deleteLater()
+
+
+# RUN AS APPLICATION
 
 if __name__ == "__main__":
     viewer = napari.Viewer()
