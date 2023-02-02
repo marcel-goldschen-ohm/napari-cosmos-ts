@@ -212,6 +212,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             for imageLayer in self.imageStackLayers():
                 zproj = zprojectRoiInImage(imageLayer.data, point, mask)
                 assert(np.allclose(zproj, imageLayer.metadata['roi_zprojections'][layer.name][i]))
+        print("Unit tests completed successfully.")
     
     def TO_BE_REMOVED_customInit(self):
         # This probably does NOT apply to you.
