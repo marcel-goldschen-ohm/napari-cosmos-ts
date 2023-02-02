@@ -87,7 +87,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         # testing
         # self.unitTests()
-        self.TO_BE_REMOVED_customInit()
+        # self.TO_BE_REMOVED_customInit()
 
     
     # TESTING
