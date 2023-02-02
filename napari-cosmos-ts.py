@@ -637,9 +637,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.numSelectedRoisLabel = QLabel()
 
         self.roiTagsEdit = QLineEdit()
+        self.roiTagsEdit.setMinimumWidth(100)
         self.roiTagsEdit.editingFinished.connect(self.updateSelectedRoiTags)
 
         self.roiTagFilterEdit = QLineEdit()
+        self.roiTagFilterEdit.setMinimumWidth(100)
         self.roiTagFilterEdit.editingFinished.connect(self.setSelectedRoiIndex)
 
         self.roiTagFilterCheckBox = QCheckBox("Filter")
