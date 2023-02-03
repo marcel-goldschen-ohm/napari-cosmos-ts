@@ -87,7 +87,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         # testing
         # self.unitTests()
-        # self.TO_BE_REMOVED_customInit()
+        self.TO_BE_REMOVED_customInit()
 
     
     # TESTING
@@ -463,7 +463,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.roiEdgeWidthSpinBox.setMinimum(0)
         self.roiEdgeWidthSpinBox.setMaximum(100)
         self.roiEdgeWidthSpinBox.setSingleStep(0.25)
-        self.roiEdgeWidthSpinBox.setValue(0.5)
+        self.roiEdgeWidthSpinBox.setValue(0.25)
 
         self.roiEdgeColorEdit = QLineEdit("yellow")
 
@@ -473,7 +473,13 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         self.selectedRoiEdgeWidthSpinBox.setMinimum(0)
         self.selectedRoiEdgeWidthSpinBox.setMaximum(100)
         self.selectedRoiEdgeWidthSpinBox.setSingleStep(0.25)
-        self.selectedRoiEdgeWidthSpinBox.setValue(1)
+        self.selectedRoiEdgeWidthSpinBox.setValue(0.5)
+
+        self.roiLayerOpacitySpinBox = QDoubleSpinBox()
+        self.roiLayerOpacitySpinBox.setMinimum(0)
+        self.roiLayerOpacitySpinBox.setMaximum(1)
+        self.roiLayerOpacitySpinBox.setSingleStep(0.25)
+        self.roiLayerOpacitySpinBox.setValue(0.5)
 
         self.selectedRoiEdgeColorEdit = QLineEdit("cyan")
 
@@ -516,6 +522,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         form.addRow("ROI Edge Width", self.roiEdgeWidthSpinBox)
         form.addRow("ROI Edge Color", self.roiEdgeColorEdit)
         form.addRow("ROI Face Color", self.roiFaceColorEdit)
+        form.addRow("ROI Layer Opacity", self.roiLayerOpacitySpinBox)
         form.addRow("Selected ROI Edge Width", self.selectedRoiEdgeWidthSpinBox)
         form.addRow("Selected ROI Edge Color", self.selectedRoiEdgeColorEdit)
         vbox.addWidget(group)
@@ -571,7 +578,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 cell.editingFinished.connect(self.updateRoiMaskWidget)
                 self.roiMaskGrid.addWidget(cell, i, j)
     
-    def addColocalizationTab(self, title="Colocalization"):
+    def addColocalizationTab(self, title="Colocalize"):
         self.findColocalizedRoisButton = QPushButton("Find colocalized ROIs")
         self.findColocalizedRoisButton.clicked.connect(self.findColocalizedRois)
 
@@ -1532,7 +1539,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         return n_filteredRois
     
     def addRoisLayer(self, center, size=None, shape_type=None, affine=np.eye(3), features=None, name="ROIs", 
-    edge_width=None, edge_color=None, face_color=None, blending="translucent_no_depth", opacity=1, isSelectedRoisLayer=False):
+    edge_width=None, edge_color=None, face_color=None, opacity=None, blending="translucent_no_depth", isSelectedRoisLayer=False):
         if shape_type is None:
             shape_type = self.roiShapeComboBox.currentText()
         if size is None:
@@ -1552,6 +1559,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 face_color = [0]*4
             else:
                 face_color = str2rgba(self.roiFaceColorEdit.text())
+        if isSelectedRoisLayer:
+            opacity = 1
+        elif opacity is None:
+            opacity = self.roiLayerOpacitySpinBox.value()
         if features is None:
             n_rois = len(center)
             features = pd.DataFrame({"tags": [""] * n_rois})
@@ -1570,7 +1581,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             self._selectedRoiLayer = roisLayer
         return roisLayer
     
-    def updateRoisLayer(self, roisLayer, shape_type=None, size=None, edge_width=None, edge_color=None, face_color=None):
+    def updateRoisLayer(self, roisLayer, shape_type=None, size=None, edge_width=None, edge_color=None, face_color=None, 
+    opacity=None, blending=None):
         if (roisLayer is None) or not self.isRoisLayer(roisLayer):
             return
         if shape_type is None:
@@ -1592,6 +1604,12 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 face_color = [0]*4
             else:
                 face_color = str2rgba(self.roiFaceColorEdit.text())
+        if roisLayer is self._selectedRoiLayer:
+            opacity = 1
+        elif opacity is None:
+            opacity = self.roiLayerOpacitySpinBox.value()
+        if blending is None:
+            blending = roisLayer.blending
         if shape_type == "point" and self.isShapesLayer(roisLayer):
             roisLayer = self.convertShapesLayerToPointsLayer(roisLayer)
         elif shape_type != "point" and self.isPointsLayer(roisLayer):
@@ -1607,6 +1625,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         roisLayer.edge_width = edge_width
         roisLayer.edge_color = edge_color
         roisLayer.face_color = face_color
+        roisLayer.opacity = opacity
+        roisLayer.blending = blending
     
     def updateSelectedRoiLayer(self, roisLayer=None, roiIndex=None, roiWorldPoint=None):
         if roiWorldPoint is not None:
@@ -1766,15 +1786,16 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         roiEdgeWidth = self.roiEdgeWidthSpinBox.value()
         roiEdgeColor = str2rgba(self.roiEdgeColorEdit.text())
         roiFaceColor = str2rgba(self.roiFaceColorEdit.text())
+        opacity = self.roiLayerOpacitySpinBox.value()
         if roiShapeType == "point":
             return self.viewer.add_points(points, name=name, affine=tform, features=features, 
                 size=roiSize, edge_width=roiEdgeWidth, edge_color=roiEdgeColor, edge_width_is_relative=False, 
-                face_color=roiFaceColor, blending='translucent_no_depth', opacity=1)
+                face_color=roiFaceColor, blending='translucent_no_depth', opacity=opacity)
         else:
             shapes = [point + np.array([[-1, -1], [-1, 1], [1, 1], [1, -1]]) * (roiSize / 2) for point in points]
             shapeTypes = [roiShapeType] * n_points
             return self.viewer.add_shapes(shapes, shape_type=shapeTypes, name=name, affine=tform, features=features, 
-                edge_width=roiEdgeWidth, edge_color=roiEdgeColor, face_color=roiFaceColor, blending='translucent_no_depth', opacity=1)
+                edge_width=roiEdgeWidth, edge_color=roiEdgeColor, face_color=roiFaceColor, blending='translucent_no_depth', opacity=opacity)
     
     def zprojectRoisInImageLayers(self, roisLayer, roiIndices=None, imageLayers=None):
         if not self.isRoisLayer(roisLayer):
