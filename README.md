@@ -9,7 +9,7 @@ conda create -y -n napari-env -c conda-forge python=3.9
 conda activate napari-env
 pip install "napari[all]"
 ```
-3. Install [tifffile](https://github.com/cgohlke/tifffile), [pyqtgraph](https://www.pyqtgraph.org), [pystackreg](https://pystackreg.readthedocs.io/en/latest/readme.html#installation), and [pycpd](https://github.com/siavashk/pycpd). Note that pystackreg and pycpd are optional and only used for image and point registration. In a command shell or terminal run the following three commands:
+3. Install [tifffile](https://github.com/cgohlke/tifffile), [pyqtgraph](https://www.pyqtgraph.org), [pystackreg](https://pystackreg.readthedocs.io/en/latest/readme.html#installation), and [pycpd](https://github.com/siavashk/pycpd). Note that pystackreg and pycpd are optional and only used for image and point registration. Several other packages are also needed including numpy, scipy, pandas, and scikit-image, but these should already be installed along with napari. If for some reason they are not you can install them with conda similar to that shown below. In a command shell or terminal run the following three commands:
 ```
 conda activate napari-env
 conda install -c conda-forge tifffile pyqtgraph pystackreg
