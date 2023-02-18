@@ -1,4 +1,4 @@
-""" napari plugin for analysis of colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
+""" napari plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
 """
 
 import os
@@ -12,6 +12,7 @@ import scipy.io as sio
 from scipy.spatial import distance
 from skimage import filters, morphology, measure
 import napari
+# from napari.components.overlays.base import SceneOverlay
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QColor, QImage, QPixmap
@@ -31,8 +32,8 @@ __author__ = "Marcel Goldschen-Ohm <goldschen-ohm@utexas.edu, marcel.goldschen@g
 __version__ = '1.0.0'
 
 
-class CoSMoS_TS_napari_UI(QTabWidget):
-    """ napari dock widget for analysis of colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
+class napari_cosmos_ts_dock_widget(QTabWidget):
+    """ napari dock widget for colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
 
         Image layer.metadata
             ['image_file_abspath'] = "abs/path/to/image/"
@@ -49,7 +50,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             ['roi_zprojection_plot_vline'] = pyqtgraph vertical line plot object
     
         TODO
-        - account for grid view?
+        - use overlay instead of layer for selected ROI
+        - account for grid view? this will be easier with an overlay
         - support per frame point positions (point tracking)? i.e., napari.layers.Tracks
         - point size does not scale during zoom on Mac! (see https://github.com/vispy/vispy/issues/2078, maybe no fix?)
     """
@@ -73,6 +75,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
 
         # Special layer for selected ROI highlighting
         self._selectedRoiLayer = None
+
+        self._mouseMode = 'pan_zoom'
 
         # setup UI
         self.initUI()
@@ -819,9 +823,11 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                     if layer.name in imlayer.metadata['roi_zprojections']:
                         del imlayer.metadata['roi_zprojections'][layer.name]
         elif self.isImageStackLayer(layer):
-            visibleImageStackLayers = [layer for layer in self.imageStackLayers() if layer.visible]
+            visibleImageStackLayers = [layer_ for layer_ in self.imageStackLayers() if layer_.visible]
             if len(visibleImageStackLayers) == 0:
                 self.noVisibleImageStacksLabel.show()
+        if layer is self._selectedRoiLayer:
+            self._selectedRoiLayer = None
         self.updateLayerSelectionBoxes()
     
     def onLayerMoved(self, event):
@@ -884,6 +890,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 layerMetadata['roi_zprojection_plot_vline'].setValue(t)
     
     def onMouseClickedOrDragged(self, viewer, event):
+        # only process click if we are in pan_zoom mode
+        if self.viewer.layers.selection.active.mode != "pan_zoom":
+            return
+
         # ignore initial mouse press event
         if event.type == 'mouse_press':
             yield
@@ -912,7 +922,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                     visibleRoisLayers.insert(0, activeRoisLayer)
                 if self._selectedRoiLayer is not None:
                     # ignore selected ROI layer
-                    visibleRoisLayers.remove(self._selectedRoiLayer)
+                    if self._selectedRoiLayer in visibleRoisLayers:
+                        visibleRoisLayers.remove(self._selectedRoiLayer)
                 for roiLayer in visibleRoisLayers:
                     # Find closest ROI to mouse click.
                     # If within ROI, then select the ROI.
@@ -963,6 +974,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
     def onMouseDoubleClicked(self, viewer, event):
         self.viewer.reset_view()
     
+    # def onModeChanged(self, event):
+    #     self._mouseMode = event.mode
+    #     print(self._mouseMode, self._mouseMode == 'pan_zoom')
+    
     # I/O
     
     def exportSession(self, filename=None, writeImageStackData=False):
@@ -983,6 +998,8 @@ class CoSMoS_TS_napari_UI(QTabWidget):
         mdict['notes'] = self.notesEdit.toPlainText() + " "
         mdict['layers'] = []
         for layer in self.viewer.layers:
+            if layer is self._selectedRoiLayer:
+                continue
             layerDict = {}
             layerDict['name'] = layer.name
             layerDict['metadata'] = {}
@@ -1040,7 +1057,13 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 layerDict['metadata'][key] = layer.metadata[key]
             if len(layerDict['metadata']) == 0:
                 del layerDict['metadata']
+            layerDict['visible'] = layer.visible
             mdict['layers'].append(layerDict)
+        roiLayer = self.selectedRoisLayer()
+        roiIndex = self.selectedRoiIndex()
+        if roiLayer is not None and roiIndex is not None:
+            mdict['selected_roi_layer'] = roiLayer.name
+            mdict['selected_roi_index'] = roiIndex
         sio.savemat(filename, mdict)
 
     def importSession(self, filename=None):
@@ -1064,11 +1087,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                 self.notesEdit.setPlainText(str(mdict['notes']).strip())
             elif key == "layers":
                 for layerDict in value:
-                    layerName = layerDict['name']
                     hasMetadata = 'metadata' in layerDict
-                    affine = layerDict['affine']
-                    opacity = layerDict['opacity']
-                    blending = str(layerDict['blending'])
                     isImageLayer = ('image' in layerDict) or (hasMetadata and ( \
                         ('image_file_relpath' in layerDict['metadata']) \
                         or ('image_file_abspath' in layerDict['metadata']) \
@@ -1078,23 +1097,18 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                     isRoisLayer = isPointsLayer or isShapesLayer
                     if isRoisLayer:
                         # ROIs layer
-                        face_color = layerDict['face_color']
-                        edge_color = layerDict['edge_color']
-                        edge_width = layerDict['edge_width']
+                        edge_width = layerDict['edge_width'] if 'edge_width' in layerDict else 1
+                        edge_width_is_relative = layerDict['edge_width_is_relative'] if 'edge_width_is_relative' in layerDict else False
                         if isPointsLayer:
                             points = layerDict['points']
                             size = layerDict['size']
-                            symbol = str(layerDict['symbol'])
-                            edge_width_is_relative = layerDict['edge_width_is_relative']
-                            layer = self.viewer.add_points(points, symbol=symbol, size=size, name=layerName, 
-                                affine=affine, opacity=opacity, blending=blending, 
-                                face_color=face_color, edge_color=edge_color, edge_width=edge_width, edge_width_is_relative=edge_width_is_relative)
+                            symbol = str(layerDict['symbol']) if 'symbol' in layerDict else 'o'
+                            layer = self.viewer.add_points(points, symbol=symbol, size=size, 
+                                                           edge_width=edge_width, edge_width_is_relative=edge_width_is_relative)
                         elif isShapesLayer:
                             shapes = layerDict['shapes']
-                            shape_type = [str(shape_type) for shape_type in layerDict['shape_type']]
-                            layer = self.viewer.add_shapes(shapes, shape_type=shape_type, name=layerName, 
-                                affine=affine, opacity=opacity, blending=blending, 
-                                face_color=face_color, edge_color=edge_color, edge_width=edge_width)
+                            shape_type = layerDict['shape_type']
+                            layer = self.viewer.add_shapes(shapes, shape_type=shape_type, edge_width=edge_width)
                         n_rois = len(layer.data)
                         features = pd.DataFrame({"tags": [""] * n_rois})
                         if 'features' in layerDict:
@@ -1103,6 +1117,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                 if key == "tags":
                                     features['tags'].replace(" ", "", inplace=True)
                         layer.features = features
+                        if 'face_color' in layerDict:
+                            layer.face_color = layerDict['face_color']
+                        if 'edge_color' in layerDict:
+                            layer.edge_color = layerDict['edge_color']
                     elif isImageLayer:
                         # image layer
                         imageAbsPath = None
@@ -1111,44 +1129,20 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                             imageAbsPath = os.path.join(sessionAbsDir, imageRelPath)
                         elif hasMetadata and ('image_file_abspath' in layerDict['metadata']):
                             imageAbsPath = os.path.abspath(layerDict['metadata']['image_file_abspath'])
-                        contrast_limits = layerDict['contrast_limits']
-                        gamma = layerDict['gamma']
-                        colormap = str(layerDict['colormap'])
-                        interpolation2d = str(layerDict['interpolation2d'])
                         if 'image' in layerDict:
                             image = layerDict['image']
-                            layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
-                                contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
+                            layer = self.viewer.add_image(image)
                             if imageAbsPath is not None:
                                 layer.metadata['image_file_abspath'] = imageAbsPath
                         elif imageAbsPath is not None:
                             subimage_slice = None
-                            if ('metadata' in layerDict) and ('subimage_slice' in layerDict['metadata']):
+                            if hasMetadata and ('subimage_slice' in layerDict['metadata']):
                                 subimage_slice = layerDict['metadata']['subimage_slice']
-                                slices = tuple([slice(start, stop, step) for (start, stop, step) in subimage_slice])
-                                # if subimage_slice.shape[1] == 2:
-                                #     subimage_slice = np.hstack([
-                                #         subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
-                                #     ])
-                                # starts = subimage_slice[:,0]
-                                # stops = subimage_slice[:,1]
-                                # steps = subimage_slice[:,2]
                             try:
                                 image = tifffile.memmap(imageAbsPath)
                                 if subimage_slice is not None:
-                                    image = image[slices]
-                                    # if len(starts) == 1:
-                                    #     # frame crop
-                                    #     image = image[starts[0]:stops[0]:steps[0]]
-                                    # elif len(starts) == 2:
-                                    #     # row,col crop
-                                    #     image = image[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-                                    # else:
-                                    #     # frame,...,row,col crop
-                                    #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-                                    #     image = image[indexer]
-                                layer = self.viewer.add_image(image, name=layerName, affine=affine, opacity=opacity, blending=blending, 
-                                    contrast_limits=contrast_limits, gamma=gamma, colormap=colormap, interpolation2d=interpolation2d)
+                                    image = image[str2slice(subimage_slice)]
+                                layer = self.viewer.add_image(image)
                                 layer.metadata['image_file_abspath'] = imageAbsPath
                                 if subimage_slice is not None:
                                     layer.metadata['subimage_slice'] = subimage_slice
@@ -1157,17 +1151,7 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                     layer = self.viewer.open(path=imageAbsPath, layer_type="image")[0]
                                     layer.metadata['image_file_abspath'] = os.path.abspath(layer.source.path)
                                     if subimage_slice is not None:
-                                        layer.data = layer.data[slices]
-                                        # if len(starts) == 1:
-                                        #     # frame crop
-                                        #     layer.data = layer.data[starts[0]:stops[0]:steps[0]]
-                                        # elif len(starts) == 2:
-                                        #     # row,col crop
-                                        #     layer.data = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-                                        # else:
-                                        #     # frame,...,row,col crop
-                                        #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-                                        #     layer.data = layer.data[indexer]
+                                        layer.data = layer.data[str2slice(subimage_slice)]
                                         layer.metadata['subimage_slice'] = subimage_slice
                                 except:
                                     msg = QMessageBox(self)
@@ -1175,12 +1159,38 @@ class CoSMoS_TS_napari_UI(QTabWidget):
                                     msg.setText(f"Failed to load image {imageAbsPath}")
                                     msg.setStandardButtons(QMessageBox.Close)
                                     msg.exec_()
+                        if 'contrast_limits' in layerDict:
+                            layer.contrast_limits = layerDict['contrast_limits']
+                        if 'gamma' in layerDict:
+                            layer.gamma = layerDict['gamma']
+                        if 'colormap' in layerDict:
+                            layer.colormap = layerDict['colormap']
+                        if 'interpolation2d' in layerDict:
+                            layer.interpolation2d = layerDict['interpolation2d']
                     if 'metadata' in layerDict:
-                        layer = self.viewer.layers[-1]
                         for key in layerDict['metadata']:
                             if key in ["image_file_abspath", "image_file_relpath"]:
                                 continue
                             layer.metadata[key] = layerDict['metadata'][key]
+                    if 'name' in layerDict:
+                        layer.name = layerDict['name']
+                    if 'affine' in layerDict:
+                        layer.affine = layerDict['affine']
+                    if 'opacity' in layerDict:
+                        layer.opacity = layerDict['opacity']
+                    if 'blending' in layerDict:
+                        layer.blending = layerDict['blending']
+                    if 'visible' in layerDict:
+                        layer.visible = layerDict['visible']
+        if 'selected_roi_index' in mdict:
+            roiIndex = mdict['selected_roi_index']
+            if 'selected_roi_layer' in mdict:
+                roiLayerName = mdict['selected_roi_layer']
+                try:
+                    roiLayer = self.viewer.layers[roiLayerName]
+                    self.setSelectedRoiIndex(roiIndex, roiLayer)
+                except KeyError:
+                    pass
 
     def getImageLayerAbsFilePath(self, layer):
         if not self.isImageLayer(layer):
@@ -2104,59 +2114,6 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             slices = self.sliceImageEdit.text().strip()
         if isinstance(slices, str):
             slices = str2slice(slices)
-        # bounds = np.hstack([
-        #     np.zeros([len(layer.data.shape),1], dtype=int), 
-        #     np.array(layer.data.shape, dtype=int).reshape([-1,1])
-        #     ])
-        # if cropSlice is None:
-        #     cropSlice = self.sliceImageEdit.text().strip()
-        #     if cropSlice == "":
-        #         return
-        # if type(cropSlice) is str:
-        #     cropSlice = [[s.strip() for s in lim.split(':')] for lim in cropSlice.strip().split(',')]
-        #     if len(cropSlice) == 1:
-        #         # frame crop
-        #         cropSliceDims = [0]
-        #     elif len(cropSlice) == 2:
-        #         # row,col crop
-        #         cropSliceDims = [-2, -1]
-        #     else:
-        #         # frame,...,row,col crop
-        #         cropSliceDims = list(range(len(layer.data.shape)))
-        #     for i in range(len(cropSlice)):
-        #         for j in range(len(cropSlice[i])):
-        #             if cropSlice[i][j] == "":
-        #                 if j < 2:
-        #                     cropSlice[i][j] = bounds[cropSliceDims[i],j]
-        #                 else:
-        #                     cropSlice[i][j] = 1
-        #             else:
-        #                 cropSlice[i][j] = int(cropSlice[i][j])
-        #         if len(cropSlice[i]) == 2:
-        #             cropSlice[i].append(1)
-        # # cropSlice = [starts column, stops column, steps column]
-        # # e.g., startstop = [[frame start, frame stop, frame step], [row start, row stop, row step], [col start, col stop, col step]]
-        # cropSlice = np.array(cropSlice, dtype=int)
-        # if cropSlice.size % 2 == 0:
-        #     cropSlice = cropSlice.reshape([-1,2])
-        #     cropSlice = np.hstack([
-        #         cropSlice, np.ones([cropSlice.shape[0],1], dtype=int)
-        #     ])
-        # elif cropSlice.size % 3 == 0:
-        #     cropSlice = cropSlice.reshape([-1,3])
-        # starts = cropSlice[:,0]
-        # stops = cropSlice[:,1]
-        # steps = cropSlice[:,2]
-        # if len(starts) == 1:
-        #     # frame crop
-        #     crop = layer.data[starts[0]:stops[0]:steps[0]]
-        # elif len(starts) == 2:
-        #     # row,col crop
-        #     crop = layer.data[...,starts[-2]:stops[-2]:steps[-2],starts[-1]:stops[-1]:steps[-1]]
-        # else:
-        #     # frame,...,row,col crop
-        #     indexer = tuple([slice(i,j,k) for (i,j,k) in zip(starts,stops,steps)])
-        #     crop = layer.data[indexer]
         imageSlice = layer.data[slices]
         name = layer.name + " slice"
         tform = self.worldToLayerTransform3x3(layer)
@@ -2167,45 +2124,10 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             return imageSliceLayer
         imageSliceLayer.metadata['image_file_abspath'] = imageAbsPath
         if 'subimage_slice' in layer.metadata:
-            subimage_slice = layer.metadata['subimage_slice'].copy().astype(int)
+            parent_slices = str2slice(layer.metadata['subimage_slice'])
+            subimage_slice = slice2str(combineSlices(parent_slices, slices, layer.data.shape))
         else:
-            subimage_slice = np.zeros([0,3], dtype=int)
-        for i in range(len(slices)):
-            start, stop, step = slices[i].start, slices[i].stop, slices[i].step
-            if subimage_slice.shape[0] > i:
-                prevStart, prevStop, prevStep = subimage_slice[i]
-                newStart = prevStart if start is None else prevStart + start
-                newStop = prevStop if stop is None else prevStart + stop
-                newStep = prevStep if step is None else prevStep * step
-                subimage_slice[i] = newStart, newStop, newStep
-            else:
-                start = 0 if start is None else (start if start >= 0 else layer.data.shape[i] + start)
-                stop = layer.data.shape[i] if stop is None else (stop if stop >= 0 else layer.data.shape[i] + stop)
-                step = 1 if step is None else step
-                subimage_slice = np.vstack([
-                    subimage_slice,
-                    np.array([[start, stop, step]], dtype=int)
-                ])
-        #     if subimage_slice.shape[1] == 2:
-        #         subimage_slice = np.hstack([
-        #             subimage_slice, np.ones([subimage_slice.shape[0],1], dtype=int)
-        #         ])
-        # else:
-        #     subimage_slice = np.hstack([
-        #         bounds, np.ones([bounds.shape[0],1], dtype=int)
-        #     ])
-        # if len(starts) == 1:
-        #     # frame crop
-        #     cropSlice[0,:2] += subimage_slice[0,0]
-        #     subimage_slice[0] = cropSlice
-        # elif len(starts) == 2:
-        #     # row,col crop
-        #     cropSlice[-2:,:2] += subimage_slice[-2:,0].reshape([2,1])
-        #     subimage_slice[-2:] = cropSlice
-        # else:
-        #     # frame,...,row,col crop
-        #     cropSlice[:,:2] += subimage_slice[:,0].reshape([-1,1])
-        #     subimage_slice = cropSlice
+            subimage_slice = slice2str(slices)
         imageSliceLayer.metadata['subimage_slice'] = subimage_slice
         return imageSliceLayer
     
@@ -2254,16 +2176,22 @@ class CoSMoS_TS_napari_UI(QTabWidget):
             neighborsLayer = None
         if roisLayer is not None:
             roiCenters = self.getRoiCenters2d(roisLayer)
-            roiCentersInWorld = self.transformPoints2dFromLayerToWorld(roiCenters, roisLayer)
-            roisNNs = distance.squareform(distance.pdist(roiCentersInWorld))
-            np.fill_diagonal(roisNNs, np.inf)
-            roisNNs = np.min(roisNNs, axis=1)
-        if not neighborsLayer is None:
+            if len(roiCenters) <= 1:
+                roisLayer = None
+            else:
+                roiCentersInWorld = self.transformPoints2dFromLayerToWorld(roiCenters, roisLayer)
+                roisNNs = distance.squareform(distance.pdist(roiCentersInWorld))
+                np.fill_diagonal(roisNNs, np.inf)
+                roisNNs = np.min(roisNNs, axis=1)
+        if neighborsLayer is not None:
             neighborCenters = self.getRoiCenters2d(neighborsLayer)
-            neighborCentersInWorld = self.transformPoints2dFromLayerToWorld(neighborCenters, neighborsLayer)
-            neighborsNNs = distance.squareform(distance.pdist(neighborCentersInWorld))
-            np.fill_diagonal(neighborsNNs, np.inf)
-            neighborsNNs = np.min(neighborsNNs, axis=1)
+            if len(neighborCenters) <= 1:
+                neighborsLayer = None
+            else:
+                neighborCentersInWorld = self.transformPoints2dFromLayerToWorld(neighborCenters, neighborsLayer)
+                neighborsNNs = distance.squareform(distance.pdist(neighborCentersInWorld))
+                np.fill_diagonal(neighborsNNs, np.inf)
+                neighborsNNs = np.min(neighborsNNs, axis=1)
         if (roisLayer is not None) and (neighborsLayer is not None):
             withinLayerNNs = np.concatenate([roisNNs, neighborsNNs])
             counts, bin_edges = np.histogram(withinLayerNNs, bins=bins)
@@ -2499,9 +2427,58 @@ def str2slice(sliceStr):
     dimSliceStrs = [dimSliceStr.strip() for dimSliceStr in sliceStr.split(',')]
     slices = []  # one slice per dimension
     for dimSliceStr in dimSliceStrs:
-        sliceIndexes = [int(idx) if idx.strip != "" else None for idx in dimSliceStr.split(':')]
+        sliceIndexes = [int(idx) if len(idx.strip()) > 0 else None for idx in dimSliceStr.split(':')]
         slices.append(slice(*sliceIndexes))
     return tuple(slices)
+
+
+def slice2str(slices):
+    dimSliceStrs = []
+    for dimSlice in slices:
+        start = str(dimSlice.start) if dimSlice.start is not None else ""
+        stop = str(dimSlice.stop) if dimSlice.stop is not None else ""
+        step = str(dimSlice.step) if dimSlice.step is not None else ""
+        dimSliceStr = start + ':' + stop + ':' + step
+        if dimSliceStr.endswith(':'):
+            dimSliceStr = dimSliceStr[:-1]
+        dimSliceStrs.append(dimSliceStr)
+    sliceStr = ','.join(dimSliceStrs)
+    while sliceStr.endswith(',:'):
+        sliceStr = sliceStr[:-2]
+    return sliceStr
+
+
+def combineSlices(parentSlices, childSlices, parentShape):
+    asStr = True if isinstance(parentSlices, str) and isinstance(childSlices, str) else False
+    if isinstance(parentSlices, str):
+        parentSlices = str2slice(parentSlices)
+    if isinstance(childSlices, str):
+        childSlices = str2slice(childSlices)
+    n_parentSlices = len(parentSlices)
+    n_childSlices = len(childSlices)
+    combinedSlices = []
+    for i in range(min(n_parentSlices, n_childSlices)):
+        parentStart = parentSlices[i].start if parentSlices[i].start is not None else 0
+        # parentStop = parentSlices[i].stop if parentSlices[i].stop is not None else parentShape[i]
+        parentStep = parentSlices[i].step if parentSlices[i].step is not None else 1
+        childStart = childSlices[i].start if childSlices[i].start is not None else 0
+        childStop = childSlices[i].stop if childSlices[i].stop is not None else parentShape[i]
+        childStep = childSlices[i].step if childSlices[i].step is not None else 1
+        start = parentStart + childStart
+        stop = parentStart + childStop
+        step = parentStep * childStep
+        if start == 0:
+            start = None
+        if stop == parentShape[i]:
+            stop = None
+        if step == 1:
+            step = None
+        combinedSlices.append(slice(start, stop, step))
+    if n_childSlices > n_parentSlices:
+        combinedSlices.extend(childSlices[n_parentSlices:])
+    if asStr:
+        combinedSlices = slice2str(combinedSlices)
+    return combinedSlices
 
 
 def str2rgba(color):
@@ -2555,6 +2532,6 @@ def clearQLayout(layout):
 
 if __name__ == "__main__":
     viewer = napari.Viewer()
-    ui = CoSMoS_TS_napari_UI(viewer)
+    ui = napari_cosmos_ts_dock_widget(viewer)
     viewer.window.add_dock_widget(ui, name='CoSMoS-TS', area='right')
     napari.run()
