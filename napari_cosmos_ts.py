@@ -92,6 +92,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         # testing
         # self.unitTests()
         # self.TO_BE_REMOVED_customInit()
+        self.importSession("/Users/marcel/Library/CloudStorage/Box-Box/Goldschen-Ohm Lab/Presentations/BPS 2023/data/2020-02-27 GFP-TAX4 L.mat")
 
     
     # TESTING
@@ -232,7 +233,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         layer = self.openTIFF('test.tif')
         layer.name = 'eGFP'
         layer.colormap = 'green'
-        layer = self.zprojectImageLayer(layer, method="mean")
+        layer = self.projectImageLayer(layer, method="mean")
         layer = self.gaussianFilterImageLayer(layer, sigma=1)
         layer = self.tophatFilterImageLayer(layer, diskRadius=3)
         layer = self.findPeakRoisInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
@@ -243,7 +244,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         layer.name = 'fcGMP'
         layer.colormap = 'magenta'
         layer.affine = tform
-        layer = self.zprojectImageLayer(layer, method="mean")
+        layer = self.projectImageLayer(layer, method="mean")
         layer = self.gaussianFilterImageLayer(layer, sigma=1)
         layer = self.tophatFilterImageLayer(layer, diskRadius=3)
         layer = self.findPeakRoisInImageLayer(layer, minPeakHeight=10, minPeakSeparation=2.5)
@@ -314,19 +315,19 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
 
         self.sliceImageEdit = QLineEdit()
 
-        self.zprojectImageButton = QPushButton("Z-Project Image")
-        self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.zprojectImageLayer))
+        self.zprojectImageButton = QPushButton("Project Image")
+        self.zprojectImageButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.projectImageLayer))
 
-        self.zprojectImageOperationComboBox = QComboBox()
-        self.zprojectImageOperationComboBox.addItem("max")
-        self.zprojectImageOperationComboBox.addItem("min")
-        self.zprojectImageOperationComboBox.addItem("std")
-        self.zprojectImageOperationComboBox.addItem("sum")
-        self.zprojectImageOperationComboBox.addItem("mean")
-        self.zprojectImageOperationComboBox.addItem("median")
-        self.zprojectImageOperationComboBox.setCurrentText("mean")
+        self.projectImageOperationComboBox = QComboBox()
+        self.projectImageOperationComboBox.addItem("max")
+        self.projectImageOperationComboBox.addItem("min")
+        self.projectImageOperationComboBox.addItem("std")
+        self.projectImageOperationComboBox.addItem("sum")
+        self.projectImageOperationComboBox.addItem("mean")
+        self.projectImageOperationComboBox.addItem("median")
+        self.projectImageOperationComboBox.setCurrentText("mean")
 
-        self.zprojectImageFrameSliceEdit = QLineEdit()
+        # self.zprojectImageFrameSliceEdit = QLineEdit()
 
         self.gaussianFilterButton = QPushButton("Gaussian Filter")
         self.gaussianFilterButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.gaussianFilterImageLayer))
@@ -362,7 +363,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.sliceImageButton)
-        form.addRow("start:stop[:step],...", self.sliceImageEdit)
+        form.addRow("start:stop[:step], ...", self.sliceImageEdit)
         vbox.addWidget(group)
 
         group = QGroupBox()
@@ -370,8 +371,8 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self.zprojectImageButton)
-        form.addRow("Projection", self.zprojectImageOperationComboBox)
-        form.addRow("start:stop[:step]", self.zprojectImageFrameSliceEdit)
+        form.addRow("Projection", self.projectImageOperationComboBox)
+        # form.addRow("start:stop[:step]", self.zprojectImageFrameSliceEdit)
         vbox.addWidget(group)
 
         group = QGroupBox()
@@ -479,12 +480,6 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         self.selectedRoiEdgeWidthSpinBox.setSingleStep(0.25)
         self.selectedRoiEdgeWidthSpinBox.setValue(0.5)
 
-        self.roiLayerOpacitySpinBox = QDoubleSpinBox()
-        self.roiLayerOpacitySpinBox.setMinimum(0)
-        self.roiLayerOpacitySpinBox.setMaximum(1)
-        self.roiLayerOpacitySpinBox.setSingleStep(0.25)
-        self.roiLayerOpacitySpinBox.setValue(0.5)
-
         self.selectedRoiEdgeColorEdit = QLineEdit("cyan")
 
         self.findPeakPointsButton = QPushButton("Find peaks in all selected image layers")
@@ -526,7 +521,6 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.addRow("ROI Edge Width", self.roiEdgeWidthSpinBox)
         form.addRow("ROI Edge Color", self.roiEdgeColorEdit)
         form.addRow("ROI Face Color", self.roiFaceColorEdit)
-        form.addRow("ROI Layer Opacity", self.roiLayerOpacitySpinBox)
         form.addRow("Selected ROI Edge Width", self.selectedRoiEdgeWidthSpinBox)
         form.addRow("Selected ROI Edge Color", self.selectedRoiEdgeColorEdit)
         vbox.addWidget(group)
@@ -649,15 +643,22 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         self.numSelectedRoisLabel = QLabel()
 
         self.roiTagsEdit = QLineEdit()
+        self.roiTagsEdit.setToolTip("Comma-separated tags")
         self.roiTagsEdit.setMinimumWidth(100)
         self.roiTagsEdit.editingFinished.connect(self.updateSelectedRoiTags)
 
         self.roiTagFilterEdit = QLineEdit()
+        # self.roiTagFilterEdit.setToolTip("Filter tags")
         self.roiTagFilterEdit.setMinimumWidth(100)
         self.roiTagFilterEdit.editingFinished.connect(self.setSelectedRoiIndex)
 
-        self.roiTagFilterCheckBox = QCheckBox("Filter")
+        self.roiTagFilterCheckBox = QCheckBox("Tag Filter")
+        # self.roiTagFilterCheckBox.setToolTip("Filter tags")
         self.roiTagFilterCheckBox.stateChanged.connect(lambda state: self.setSelectedRoiIndex())
+
+        self.applyFilterButton = QPushButton("Apply Filter")
+        self.applyFilterButton.setToolTip("Copy filtered ROIs to new layer")
+        self.applyFilterButton.clicked.connect(self.copyFilteredRoisToNewLayer)
 
         self.noVisibleImageStacksLabel = QLabel("No visible image stacks.")
 
@@ -668,11 +669,12 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         grid.addWidget(self.numSelectedRoisLabel, 0, 2)
         grid.addWidget(self.roiTagFilterCheckBox, 0, 3)
         grid.addWidget(self.roiTagFilterEdit, 0, 4)
+        grid.addWidget(self.applyFilterButton, 0, 5)
         grid.addWidget(QLabel("ROI Index"), 1, 0, Qt.AlignRight)
         grid.addWidget(self.roiIndexSpinBox, 1, 1)
         grid.addWidget(self.currentRoiWorldPositionLabel, 1, 2)
         grid.addWidget(QLabel("ROI Tags"), 1, 3, Qt.AlignRight)
-        grid.addWidget(self.roiTagsEdit, 1, 4)
+        grid.addWidget(self.roiTagsEdit, 1, 4, 1, 2)
 
         tab = QWidget()
         vbox = QVBoxLayout(tab)
@@ -1548,8 +1550,39 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
                 n_filteredRois += 1
         return n_filteredRois
     
+    def copyFilteredRoisToNewLayer(self):
+        roisLayer = self.selectedRoisLayer()
+        if roisLayer is None:
+            return
+        n_rois = len(roisLayer.data)
+        filterMask = np.ones(n_rois, dtype=bool)
+        tagFilter = self.roiTagFilterEdit.text().strip()
+        if len(tagFilter) > 0:
+            roisLayer.features['tags'].fillna("", inplace=True)
+            for i in range(n_rois):
+                tags = roisLayer.features['tags'][i]
+                if not self.checkIfTagsMatchFilter(tags, tagFilter):
+                    filterMask[i] = False
+        center = self.getRoiCenters2d(roisLayer)[filterMask]
+        size = self.getRoiSizes2d(roisLayer)[filterMask]
+        if self.isPointsLayer(roisLayer):
+            shape_type = "point"
+        elif self.isShapesLayer(roisLayer):
+            shape_types = self.getRoiShapeTypes(roisLayer)
+            shape_type = [shape_types[i] for i in range(n_rois) if filterMask[i]]
+        affine = roisLayer.affine.affine_matrix
+        features = roisLayer.features[filterMask].copy()
+        name = roisLayer.name + " " + tagFilter
+        edge_width = np.array(roisLayer.edge_width)[filterMask]
+        edge_color = roisLayer.edge_color[filterMask]
+        face_color = roisLayer.face_color[filterMask]
+        opacity = roisLayer.opacity
+        blending = roisLayer.blending
+        self.addRoisLayer(center, size, shape_type=shape_type, affine=affine, features=features, name=name, 
+                          edge_width=edge_width, edge_color=edge_color, face_color=face_color, opacity=opacity, blending=blending)
+    
     def addRoisLayer(self, center, size=None, shape_type=None, affine=np.eye(3), features=None, name="ROIs", 
-    edge_width=None, edge_color=None, face_color=None, opacity=None, blending="translucent_no_depth", isSelectedRoisLayer=False):
+    edge_width=None, edge_color=None, face_color=None, opacity=1, blending="translucent_no_depth", isSelectedRoisLayer=False):
         if shape_type is None:
             shape_type = self.roiShapeComboBox.currentText()
         if size is None:
@@ -1569,10 +1602,6 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
                 face_color = [0]*4
             else:
                 face_color = str2rgba(self.roiFaceColorEdit.text())
-        if isSelectedRoisLayer:
-            opacity = 1
-        elif opacity is None:
-            opacity = self.roiLayerOpacitySpinBox.value()
         if features is None:
             n_rois = len(center)
             features = pd.DataFrame({"tags": [""] * n_rois})
@@ -1592,7 +1621,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         return roisLayer
     
     def updateRoisLayer(self, roisLayer, shape_type=None, size=None, edge_width=None, edge_color=None, face_color=None, 
-    opacity=None, blending=None):
+    opacity=1, blending=None):
         if (roisLayer is None) or not self.isRoisLayer(roisLayer):
             return
         if shape_type is None:
@@ -1614,10 +1643,6 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
                 face_color = [0]*4
             else:
                 face_color = str2rgba(self.roiFaceColorEdit.text())
-        if roisLayer is self._selectedRoiLayer:
-            opacity = 1
-        elif opacity is None:
-            opacity = self.roiLayerOpacitySpinBox.value()
         if blending is None:
             blending = roisLayer.blending
         if shape_type == "point" and self.isShapesLayer(roisLayer):
@@ -1632,7 +1657,9 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
             roiData = self.getRoisShapeData(roiCenters, size)
             roisLayer.data = roiData
             roisLayer.shape_type = [shape_type] * len(roiData)
-        roisLayer.edge_width = edge_width
+        if not np.allclose(roisLayer.edge_width, edge_width):
+            # setting edge width is expensive?
+            roisLayer.edge_width = edge_width
         roisLayer.edge_color = edge_color
         roisLayer.face_color = face_color
         roisLayer.opacity = opacity
@@ -1796,7 +1823,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         roiEdgeWidth = self.roiEdgeWidthSpinBox.value()
         roiEdgeColor = str2rgba(self.roiEdgeColorEdit.text())
         roiFaceColor = str2rgba(self.roiFaceColorEdit.text())
-        opacity = self.roiLayerOpacitySpinBox.value()
+        opacity = 1
         if roiShapeType == "point":
             return self.viewer.add_points(points, name=name, affine=tform, features=features, 
                 size=roiSize, edge_width=roiEdgeWidth, edge_color=roiEdgeColor, edge_width_is_relative=False, 
@@ -1960,38 +1987,18 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
     
     # IMAGE PROCESSING
     
-    def zprojectImageLayer(self, layer, method=None, frameSlice=None):
+    def projectImageLayer(self, layer, method=None, frameSlice=None):
         if not self.isImageLayer(layer) or (layer.ndim <= 2):
             return
         if method is None:
-            method = self.zprojectImageOperationComboBox.currentText()
+            method = self.projectImageOperationComboBox.currentText()
         methods = {"max": np.max, "min": np.min, "std": np.std, "sum": np.sum, "mean": np.mean, "median": np.median}
         func = methods[method]
-        if frameSlice is None:
-            frameSlice = self.zprojectImageFrameSliceEdit.text().strip()
-        if isinstance(frameSlice, str):
-            frameSlice = str2slice(frameSlice)
-        # n_frames = layer.data.shape[0]
-        # if frames is None:
-        #     framesText = self.zprojectImageFramesEdit.text().strip()
-        #     if framesText == "":
-        #         frames = np.arange(n_frames)
-        #     else:
-        #         slice = framesText.split(':')
-        #         try:
-        #             start = int(slice[0])
-        #         except (IndexError, ValueError):
-        #             start = 0
-        #         try:
-        #             stop = int(slice[1])
-        #         except (IndexError, ValueError):
-        #             stop = n_frames
-        #         try:
-        #             step = int(slice[2])
-        #         except (IndexError, ValueError):
-        #             step = 1
-        #         frames = np.arange(start, stop, step)
-        projected = func(layer.data[frameSlice], axis=0)
+        # if frameSlice is None:
+        #     frameSlice = self.zprojectImageFrameSliceEdit.text().strip()
+        # if isinstance(frameSlice, str):
+        #     frameSlice = str2slice(frameSlice)
+        projected = func(layer.data, axis=0)
         name = layer.name + f" {method}-proj"
         tform = self.worldToLayerTransform3x3(layer)
         return self.viewer.add_image(projected, name=name, affine=tform, 
