@@ -92,7 +92,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         # testing
         # self.unitTests()
         # self.TO_BE_REMOVED_customInit()
-        self.importSession("/Users/marcel/Library/CloudStorage/Box-Box/Goldschen-Ohm Lab/Presentations/BPS 2023/data/2020-02-27 GFP-TAX4 L.mat")
+        # self.importSession("/Users/marcel/Library/CloudStorage/Box-Box/Goldschen-Ohm Lab/Presentations/BPS 2023/data/2020-02-27 GFP-TAX4 L.mat")
 
     
     # TESTING
@@ -409,6 +409,13 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         self.registerLayersButton = QPushButton("Register Layers")
         self.registerLayersButton.clicked.connect(lambda x: self.registerLayers())
 
+        self.translationLineEdit = QLineEdit("0, 0")
+        self.rotationLineEdit = QLineEdit("0")
+        self.scaleLineEdit = QLineEdit("1, 1")
+
+        self.manualTransformButton = QPushButton("Set transform for all selected layers")
+        # self.manualTransformButton.clicked.connect(lambda x: self.setManualTransform())
+
         self.copyLayerTransformButton = QPushButton("Copy selected layer transform")
         self.copyLayerTransformButton.clicked.connect(lambda x: self.copyLayerTransform())
 
@@ -436,6 +443,17 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.addRow("Fixed Layer", self.fixedLayerComboBox)
         form.addRow("Moving Layer", self.movingLayerComboBox)
         form.addRow("Transform", self.layerRegistrationTransformTypeComboBox)
+        vbox.addWidget(group)
+
+        group = QGroupBox()
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
+        form.addRow(self.manualTransformButton)
+        form.addRow("Translation (pixels)", self.translationLineEdit)
+        form.addRow("Rotation (degrees)", self.rotationLineEdit)
+        form.addRow("Scale", self.scaleLineEdit)
         vbox.addWidget(group)
 
         vbox.addWidget(self.copyLayerTransformButton)
@@ -2539,6 +2557,18 @@ def clearQLayout(layout):
 
 if __name__ == "__main__":
     viewer = napari.Viewer()
+
     ui = napari_cosmos_ts_dock_widget(viewer)
     viewer.window.add_dock_widget(ui, name='CoSMoS-TS', area='right')
+
+    # from aicsimageio import AICSImage
+    # from aicsimageio.readers import BioformatsReader
+    # fp = "/Users/marcel/Downloads/img/2019-08-22 Tax4-GFP posA-3 10nM fcGMP to fcGMP+10uM cGMP ex532nm60mW100ms.tif"
+    # fp = "/Users/marcel/Downloads/img/ZMW_loc17_fcGFP_532nm_80mW_1_MMStack_Pos0.ome.tif"
+    # fp = "/Users/marcel/Downloads/img/fcGFP_637nm_60mW_1_MMStack_Default.ome.tif"
+    # # img = AICSImage(fp, reader=BioformatsReader)
+    # img = BioformatsReader(fp)
+    # print(img.shape)
+    # # viewer.add_image()
+
     napari.run()
