@@ -341,6 +341,12 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         self.tophatFilterDiskRadiusSpinBox = QDoubleSpinBox()
         self.tophatFilterDiskRadiusSpinBox.setValue(3)
 
+        self.make2dButton = QPushButton("Make 2D")
+        self.make2dButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.make2d))
+
+        self.make3dButton = QPushButton("Make 3D")
+        self.make3dButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.make3d))
+
         tab = QWidget()
         hbox = QHBoxLayout(tab)
         vbox = QVBoxLayout()
@@ -391,6 +397,9 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.addRow("Disk Radius", self.tophatFilterDiskRadiusSpinBox)
         vbox.addWidget(group)
 
+        vbox.addWidget(self.make2dButton)
+        vbox.addWidget(self.make3dButton)
+
         vbox.addStretch()
         hbox.addLayout(vbox)
         hbox.addStretch()
@@ -409,12 +418,12 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         self.registerLayersButton = QPushButton("Register Layers")
         self.registerLayersButton.clicked.connect(lambda x: self.registerLayers())
 
-        self.translationLineEdit = QLineEdit("0, 0")
-        self.rotationLineEdit = QLineEdit("0")
-        self.scaleLineEdit = QLineEdit("1, 1")
+        # self.translationLineEdit = QLineEdit("0, 0")
+        # self.rotationLineEdit = QLineEdit("0")
+        # self.scaleLineEdit = QLineEdit("1, 1")
 
-        self.manualTransformButton = QPushButton("Set transform for all selected layers")
-        # self.manualTransformButton.clicked.connect(lambda x: self.setManualTransform())
+        # self.manualTransformButton = QPushButton("Set transform for all selected layers")
+        # self.manualTransformButton.clicked.connect(lambda x: self.applyToSelectedLayers(self.setManualTransform))
 
         self.copyLayerTransformButton = QPushButton("Copy selected layer transform")
         self.copyLayerTransformButton.clicked.connect(lambda x: self.copyLayerTransform())
@@ -445,16 +454,16 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         form.addRow("Transform", self.layerRegistrationTransformTypeComboBox)
         vbox.addWidget(group)
 
-        group = QGroupBox()
-        form = QFormLayout(group)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self.manualTransformButton)
-        form.addRow("Translation (pixels)", self.translationLineEdit)
-        form.addRow("Rotation (degrees)", self.rotationLineEdit)
-        form.addRow("Scale", self.scaleLineEdit)
-        vbox.addWidget(group)
+        # group = QGroupBox()
+        # form = QFormLayout(group)
+        # form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        # form.setContentsMargins(5, 5, 5, 5)
+        # form.setSpacing(5)
+        # form.addRow(self.manualTransformButton)
+        # form.addRow("Translation X, Y (pixels)", self.translationLineEdit)
+        # form.addRow("Rotation (degrees)", self.rotationLineEdit)
+        # form.addRow("Scale X, Y", self.scaleLineEdit)
+        # vbox.addWidget(group)
 
         vbox.addWidget(self.copyLayerTransformButton)
         vbox.addWidget(self.pasteLayerTransformButton)
@@ -952,7 +961,8 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
                     mousePointInRoiLayer = self.transformPoints2dFromWorldToLayer(mousePointInWorld, roiLayer)
                     if self.isPointsLayer(roiLayer):
                         roiCentersInRoiLayer = roiLayer.data[:,-2:]
-                        roiSizes = roiLayer.size[:,-2:]
+                        sizes = roiLayer.size.reshape(-1, 1)
+                        roiSizes = np.hstack([sizes, sizes])
                     elif self.isShapesLayer(roiLayer):
                         shapesData = [data[:,-2:] for data in roiLayer.data]
                         shapeTypes = roiLayer.shape_type
@@ -1343,6 +1353,24 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
         worldColLim = worldPoints[:,1].min(), worldPoints[:,1].max()
         return worldRowLim, worldColLim
     
+    # def setManualTransform(self, layer):
+    #     translation = reversed([float(x) for x in self.translationLineEdit.text().split(",")])
+    #     rotation = float(self.rotationLineEdit.text())
+    #     scale = reversed([float(x) for x in self.scaleLineEdit.text().split(",")])
+    #     layer.affine = napari.utils.transforms.Affine(translate=translation, rotate=rotation, scale=scale)
+
+    def make2d(self, layer):
+        if not self.isImageLayer(layer):
+            return
+        if layer.ndim == 3 and layer.data.shape[0] == 1:
+            layer.data = layer.data.reshape(layer.data.shape[1:])
+    
+    def make3d(self, layer):
+        if not self.isImageLayer(layer):
+            return
+        if layer.ndim == 2:
+            layer.data = layer.data.reshape([1] + list(layer.data.shape))
+    
     # TODO: grid bounds not quite right?
     def UNUSED_getLayerWorldGridBoxes(self):
         n_layers = len(self.viewer.layers)
@@ -1698,7 +1726,7 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
             if self.isPointsLayer(roisLayer):
                 roiShapeType = "point"
                 roiData = roisLayer.data[roiIndex,-2:]
-                roiSize = roisLayer.size[roiIndex,-2:]
+                roiSize = np.array([roisLayer.size[roiIndex], roisLayer.size[roiIndex]])
             elif self.isShapesLayer(roisLayer):
                 roiShapeType = roisLayer.shape_type[roiIndex]
                 roiData = roisLayer.data[roiIndex][:,-2:]
@@ -1754,7 +1782,8 @@ class napari_cosmos_ts_dock_widget(QTabWidget):
     
     def getRoiSizes2d(self, roisLayer):
         if self.isPointsLayer(roisLayer):
-            return roisLayer.size[:,-2:]
+            sizes = roisLayer.size.reshape(-1, 1)
+            return np.hstack([sizes, sizes])
         elif self.isShapesLayer(roisLayer):
             return np.array([data[:,-2:].max(axis=0) - data[:,-2:].min(axis=0) for data in roisLayer.data])
     
@@ -2568,7 +2597,10 @@ if __name__ == "__main__":
     # fp = "/Users/marcel/Downloads/img/fcGFP_637nm_60mW_1_MMStack_Default.ome.tif"
     # # img = AICSImage(fp, reader=BioformatsReader)
     # img = BioformatsReader(fp)
+    # img = tifffile.memmap(fp)
+    # img = viewer.open(path=fp, layer_type="image")[0].data
     # print(img.shape)
     # # viewer.add_image()
+    # viewer.open(path=fp, layer_type="image")
 
     napari.run()
