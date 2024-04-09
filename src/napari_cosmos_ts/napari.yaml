@@ -1,0 +1,9 @@
+name: napari-cosmos-ts
+contributions:
+  commands:
+  - id: napari-cosmos-ts.main_widget
+    title: Colocalization Single-Molecule Spectroscopy Time Series analysis
+    python_name: napari_cosmos_ts.main_widget:MainWidget
+  widgets:
+  - command: napari-cosmos-ts.main_widget
+    display_name: CoSMoS Time Series analyzer

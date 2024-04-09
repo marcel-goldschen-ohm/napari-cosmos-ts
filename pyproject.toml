@@ -1,0 +1,28 @@
+[project]
+name = "napari-cosmos-ts"
+version = "0.1.0"
+description = "napari plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS) analysis"
+authors = [
+    {name = "Marcel Goldschen-Ohm", email = "goldschen-ohm@utexas.edu"},
+]
+dependencies = [
+    "napari>=0.4.19.post1",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[project.entry-points."napari.manifest"]
+napari-cosmos-ts = "napari_cosmos_ts:napari.yaml"
+
+[tool.pdm.package-data]
+napari-cosmos-ts = [
+    "src/napari_cosmos_ts/napari.yaml"
+]
