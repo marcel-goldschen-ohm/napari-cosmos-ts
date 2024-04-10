@@ -1,8 +1,13 @@
-
+"""
+TODO:
+- implement tag filter
+- fix bug: import creates extra selected point layer?
+- implement idealization?
+"""
 
 import os
 import numpy as np
-import napari
+import pandas as pd
 from napari.viewer import Viewer
 from napari.layers import Layer, Image, Points
 from napari.utils.events import Event
@@ -23,6 +28,9 @@ class MainWidget(QTabWidget):
         # Data that can be serialized and should be saved should be stored in the individual layer metadata dicts.
         self._layer_metadata: list[dict] = []
 
+        # points layer for just the selected projection point 
+        self._selected_point_layer = None
+
         # UI
         self._setup_ui()
 
@@ -34,14 +42,6 @@ class MainWidget(QTabWidget):
         self.viewer.mouse_drag_callbacks.append(self._on_mouse_clicked_or_dragged)
         self.viewer.mouse_double_click_callbacks.append(self._on_mouse_doubleclicked)
     
-    @property
-    def selected_point_layer(self) -> Points | None:
-        return getattr(self, '_selected_point_layer', None)
-    
-    @selected_point_layer.setter
-    def selected_point_layer(self, layer: Points | None):
-        self._selected_point_layer = layer
-    
     def export_session(self, filepath: str = None):
         """ Export data to MATLAB .mat file.
         """
@@ -49,7 +49,7 @@ class MainWidget(QTabWidget):
 
         if filepath is None:
             from qtpy.QtWidgets import QFileDialog
-            filepath, _filter = QFileDialog.getSaveFileName(self, "Save data in MATLAB file format.", "", "MATLAB files (*.mat)")
+            filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "MATLAB files (*.mat)")
             if filepath == "":
                 return
         session_abspath = os.path.abspath(filepath)
@@ -62,7 +62,7 @@ class MainWidget(QTabWidget):
         session['users'] = self._users_edit.text() + " "
         session['notes'] = self._notes_edit.toPlainText() + " "
         
-        # layer data
+        # layer dicts
         session['layers'] = []
         for layer in self.viewer.layers:
             layer_data = {}
@@ -72,43 +72,42 @@ class MainWidget(QTabWidget):
             layer_data['blending'] = layer.blending
             layer_data['visible'] = layer.visible
 
-            # image layer
             if isinstance(layer, Image):
                 layer_data['type'] = 'image'
                 image_abspath = self._image_layer_abspath(layer)
                 if image_abspath is not None:
                     image_relpath = os.path.relpath(image_abspath, start=session_absdir)
-                    layer_data['file_abspath'] = image_abspath
-                    layer_data['file_relpath'] = image_relpath
+                    layer_data['abspath'] = image_abspath
+                    layer_data['relpath'] = image_relpath
                 if image_abspath is None:
                     # store image data if it does not already exist on disk
-                    layer_data['image'] = layer.data
-                if 'image' not in layer_data:
+                    layer_data['data'] = layer.data
+                if 'data' not in layer_data:
                     # if image data is not stored in the session, store shape and dtype
-                    layer_data['image_shape'] = layer.data.shape
-                    layer_data['image_dtype'] = str(layer.data.dtype)
+                    layer_data['data_shape'] = layer.data.shape
+                    layer_data['data_dtype'] = str(layer.data.dtype)
                 layer_data['contrast_limits'] = layer.contrast_limits
                 layer_data['gamma'] = layer.gamma
                 layer_data['colormap'] = layer.colormap.name
                 layer_data['interpolation2d'] = layer.interpolation2d
             
-            # points layer
             elif isinstance(layer, Points):
                 layer_data['type'] = 'points'
-                layer_data['points'] = layer.data
+                layer_data['data'] = layer.data
                 layer_data['size'] = layer.size
-                layer_data['symbol'] = layer.symbol
-                if not layer.features.empty:
-                    layer_data['features'] = {}
-                    for key in layer.features:
-                        if key == 'tags':
-                            layer.features['tags'].fillna("", inplace=True)
-                            layer.features['tags'].replace("", " ", inplace=True)
-                        layer_data['features'][key] = layer.features[key].to_numpy()
+                layer_data['symbol'] = [str(symbol) for symbol in layer.symbol]
                 layer_data['face_color'] = layer.face_color
                 layer_data['edge_color'] = layer.edge_color
                 layer_data['edge_width'] = layer.edge_width
                 layer_data['edge_width_is_relative'] = layer.edge_width_is_relative
+
+                if not layer.features.empty:
+                    layer_data['features'] = {}
+                    for key in layer.features:
+                        if key == 'tags':
+                            layer.features['tags'] = layer.features['tags'].fillna("")
+                            layer.features['tags'] = layer.features['tags'].replace("", " ")
+                        layer_data['features'][key] = layer.features[key].to_numpy()
             
             # layer metadata
             if layer.metadata:
@@ -117,19 +116,119 @@ class MainWidget(QTabWidget):
             # add layer data to session
             session['layers'].append(layer_data)
         
-        # roiLayer = self.selectedRoisLayer()
-        # roiIndex = self.selectedRoiIndex()
-        # if roiLayer is not None and roiIndex is not None:
-        #     mdict['selected_roi_layer'] = roiLayer.name
-        #     mdict['selected_roi_index'] = roiIndex
-        
         # save session to .mat file
         savemat(filepath, session)
     
     def import_session(self, filepath: str = None):
         """ Import data from MATLAB .mat file.
         """
-        pass # TODO
+        from scipy.io import loadmat
+
+        if filepath is None:
+            from qtpy.QtWidgets import QFileDialog
+            filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "MATLAB files (*.mat)")
+            if filepath == "":
+                return
+        session_abspath = os.path.abspath(filepath)
+        session_absdir, session_file = os.path.split(session_abspath)
+
+        self.viewer.layers.clear()
+        self._selected_point_layer = None
+
+        session = loadmat(filepath, simplify_cells=True)
+
+        for key, value in session.items():
+            if key == "date":
+                self._date_edit.setText(str(value).strip())
+            elif key == "ID":
+                self._id_edit.setText(str(value).strip())
+            elif key == "users":
+                self._users_edit.setText(str(value).strip())
+            elif key == "notes":
+                self._notes_edit.setPlainText(str(value).strip())
+            elif key == "layers":
+                for layer_data in value:
+                    layer = None
+                    
+                    if layer_data['type'] == 'image':
+                        abspath = None
+                        if 'relpath' in layer_data:
+                            relpath = layer_data['relpath']
+                            abspath = os.path.join(session_absdir, relpath)
+                        elif 'abspath' in layer_data:
+                            abspath = layer_data['abspath']
+                        
+                        if 'data' in layer_data:
+                            image = layer_data['data']
+                            layer = self.viewer.add_image(image)
+                        elif abspath is not None:
+                            try:
+                                layer = self.viewer.open(abspath, layer_type="image")[0]
+                            except Exception as error:
+                                print(error)
+                        if layer is None:
+                            continue
+                        
+                        if 'contrast_limits' in layer_data:
+                            layer.contrast_limits = layer_data['contrast_limits']
+                        if 'gamma' in layer_data:
+                            layer.gamma = layer_data['gamma']
+                        if 'colormap' in layer_data:
+                            layer.colormap = layer_data['colormap']
+                        if 'interpolation2d' in layer_data:
+                            layer.interpolation2d = layer_data['interpolation2d']
+                    
+                    elif layer_data['type'] == 'points':
+                        points = layer_data['data']
+                        layer = self.viewer.add_points(points)
+                        
+                        if 'size' in layer_data:
+                            layer.size = layer_data['size']
+                        if 'symbol' in layer_data:
+                            layer.symbol = layer_data['symbol']
+                        if 'face_color' in layer_data:
+                            layer.face_color = layer_data['face_color']
+                        if 'edge_color' in layer_data:
+                            layer.edge_color = layer_data['edge_color']
+                        if 'edge_width' in layer_data:
+                            layer.edge_width = layer_data['edge_width']
+                        if 'edge_width_is_relative' in layer_data:
+                            layer.edge_width_is_relative = layer_data['edge_width_is_relative']
+                        
+                        n_points = len(layer.data)
+                        features = pd.DataFrame({"tags": [""] * n_points})
+                        if 'features' in layer_data:
+                            for key in layer_data['features']:
+                                features[key] = layer_data['features'][key]
+                                if key == "tags":
+                                    features['tags'] = features['tags'].replace(" ", "")
+                        layer.features = features
+                    
+                    if 'name' in layer_data:
+                        layer.name = layer_data['name']
+                    if 'affine' in layer_data:
+                        layer.affine = layer_data['affine']
+                    if 'opacity' in layer_data:
+                        layer.opacity = layer_data['opacity']
+                    if 'blending' in layer_data:
+                        layer.blending = layer_data['blending']
+                    if 'visible' in layer_data:
+                        layer.visible = layer_data['visible']
+                    if 'metadata' in layer_data:
+                        layer.metadata = layer_data['metadata']
+                    
+                    if isinstance(layer, Image):
+                        if abspath is not None:
+                            layer.metadata['abspath'] = abspath
+                        if 'slice' in layer.metadata:
+                            slice_str = layer.metadata['slice']
+                            layer.data = layer.data[slice_from_str(slice_str)]
+                    elif isinstance(layer, Points):
+                        if 'is_selected_point_layer' in layer.metadata:
+                            self._selected_point_layer = layer
+        
+        if self._selected_point_layer is not None:
+            self.set_projection_point(self._selected_point_layer.data)
     
     def split_image_layer(self, layer: Image, regions: str = None):
         """
@@ -405,44 +504,72 @@ class MainWidget(QTabWidget):
         )
         return new_layer
 
-    def find_colocalized_points(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None):
+    def find_colocalized_points(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None) -> Points:
         """
         """
         if layer is None:
             layer_name = self._coloc_layer_combobox.currentText()
-            layer = self.viewer.layers[layer_name]
+            try:
+                layer = self.viewer.layers[layer_name]
+            except KeyError:
+                return
         if neighbors_layer is None:
             neighbors_layer_name = self._coloc_neighbors_layer_combobox.currentText()
-            neighbors_layer = self.viewer.layers[neighbors_layer_name]
+            try:
+                neighbors_layer = self.viewer.layers[neighbors_layer_name]
+            except KeyError:
+                return
+        if neighbors_layer is layer:
+            return
         if nearest_neighbor_cutoff is None:
             nearest_neighbor_cutoff = self._coloc_nearest_neighbor_cutoff_spinbox.value()
+
+        # points in world coords
+        points = self._transform_points2d_from_layer_to_world(layer.data[:,-2:], layer)
+        neighbors = self._transform_points2d_from_layer_to_world(neighbors_layer.data[:,-2:], neighbors_layer)
+
+        # colocalized points in world coords
+        colocalized = find_colocalized_points(points, neighbors, nearest_neighbor_cutoff)
+
+        # colocalized points layer
+        n_points = len(colocalized)
+        new_layer = self.viewer.add_points(
+            colocalized,
+            name = "colocalized",
+            symbol = "disc",
+            size = [self._point_size_spinbox.value()] * n_points,
+            face_color = [[1, 0, 1, 0.1]] * n_points,
+            edge_color = [[1, 0, 1, 1]] * n_points,
+            opacity = 1,
+            blending = "translucent_no_depth",
+        )
+        return new_layer
     
-    def set_projection_point(self, worldpt2d: np.ndarray = None, layer: Points = None, point_index: int = None):
+    def set_projection_point(self, worldpt2d: np.ndarray | None):
         """ 
         """
         if worldpt2d is None:
-            if layer is not None and point_index is not None:
-                layerpt2d = layer.data[point_index,-2:]
-                worldpt2d = self._transform_points2d_from_layer_to_world(layerpt2d, layer)
-        
-        if worldpt2d is None:
             # clear selected projection point overlay
-            if self.selected_point_layer is not None:
-                self.viewer.layers.remove(self.selected_point_layer)
-                self.selected_point_layer = None
+            if self._selected_point_layer is not None:
+                self.viewer.layers.remove(self._selected_point_layer)
+                self._selected_point_layer = None
             
             # clear point projection plots
             for metadata in self._layer_metadata:
                 if 'point_projection_data' in metadata:
                     metadata['point_projection_data'].setData([])
             
+            # update point projections tab
+            self._projection_point_world_label.setText("")
+            self._tag_edit.setText("")
+            
             return
         
         worldpt2d = np.array(worldpt2d).reshape([1, 2])
         
         # update selected projection point overlay
-        if self.selected_point_layer is None:
-            self.selected_point_layer = self.viewer.add_points(
+        if self._selected_point_layer is None:
+            self._selected_point_layer = self.viewer.add_points(
                 worldpt2d,
                 name = "selected point",
                 symbol = "disc",
@@ -452,11 +579,19 @@ class MainWidget(QTabWidget):
                 opacity = 1,
                 blending = "translucent_no_depth",
             )
+            self._selected_point_layer.metadata['is_selected_point_layer'] = True
+            # because self._selected_point_layer is not yet defined during layer insertion
+            self._update_layer_selection_comboboxes(self._selected_point_layer)
         else:
-            self.selected_point_layer.data = worldpt2d
+            self._selected_point_layer.data = worldpt2d
+        
+        # update point projections tab
+        row, col = np.round(worldpt2d).astype(int).flatten()
+        self._projection_point_world_label.setText(f"[{row}, {col}]")
+        self._tag_edit.setText("")
         
         # project selected point for all imagestack layers
-        point_size = int(np.round(self.selected_point_layer.size[0]))
+        point_size = int(np.round(self._selected_point_layer.size[0]))
         point_mask = np.ones([point_size, point_size])
         for layer, metadata in zip(self.viewer.layers, self._layer_metadata):
             if isinstance(layer, Image) and layer.data.ndim == 3:
@@ -468,11 +603,97 @@ class MainWidget(QTabWidget):
                     # update plot
                     metadata['point_projection_data'].setData(point_projection)
     
+    def select_projection_point(self, layer: Points = None, point_index: int = None):
+        # add guard because blockSignals() does not work for QSpinBox.valueChanged
+        if getattr(self, '_select_projection_point_in_progress', False):
+            return
+        self._select_projection_point_in_progress = True
+
+        self._projection_points_layer_combobox.blockSignals(True)
+        self._projection_point_index_spinbox.blockSignals(True)
+
+        if layer is None:
+            layer_name = self._projection_points_layer_combobox.currentText()
+            if layer_name != "":
+                layer = self.viewer.layers[layer_name]
+        else:
+            self._projection_points_layer_combobox.setCurrentText(layer.name)
+        
+        if layer is None:
+            self._n_projection_points_label.setText("")
+            self._projection_point_index_spinbox.clear()
+        else:
+            n_points = layer.data.shape[0]
+            self._n_projection_points_label.setText(f"{n_points} pts")
+            self._projection_point_index_spinbox.setMaximum(n_points - 1)
+
+            if point_index is None:
+                if self._projection_point_index_spinbox.text() != "":
+                    point_index = self._projection_point_index_spinbox.value()
+            else:
+                self._projection_point_index_spinbox.setValue(point_index)
+                point_index = self._projection_point_index_spinbox.value()
+            
+            if n_points == 0:
+                point_index = None
+            
+            if point_index is None:
+                self._projection_point_index_spinbox.clear()
+        
+        if layer is not None and point_index is not None:
+            # project point
+            layerpt2d = layer.data[point_index,-2:]
+            worldpt2d = self._transform_points2d_from_layer_to_world(layerpt2d, layer)
+            self.set_projection_point(worldpt2d)
+
+            # show point tags
+            try:
+                tags: str = layer.features['tags'][point_index]
+            except (KeyError, IndexError):
+                tags = ""
+            self._tag_edit.setText(tags)
+
+        # self._projection_point_layer: Points | None = layer
+        # self._projection_point_index: int | None = point_index
+        
+        self._projection_points_layer_combobox.blockSignals(False)
+        self._projection_point_index_spinbox.blockSignals(False)
+        
+        # remove guard
+        self._select_projection_point_in_progress = False
+    
+    def set_point_tags(self, layer: Points = None, point_index: int = None, tags: str = None):
+        if layer is None:
+            layer_name = self._projection_points_layer_combobox.currentText()
+            try:
+                layer = self.viewer.layers[layer_name]
+            except KeyError:
+                return
+        if point_index is None:
+            if self._projection_point_index_spinbox.text() == "":
+                return
+            point_index = self._projection_point_index_spinbox.value()
+        
+        if tags is None:
+            tags = self._tag_edit.text().strip()
+
+        if not 'tags' in layer.features:
+            layer.features['tags'] = [""] * len(layer.data)
+        
+        layer.features.loc[point_index, 'tags'] = tags
+    
     def _layers(self, include_selected_point_layer: bool = False):
         layers = [layer for layer in reversed(self.viewer.layers)]
         if not include_selected_point_layer:
-            if self.selected_point_layer in layers:
-                layers.remove(self.selected_point_layer)
+            if self._selected_point_layer in layers:
+                layers.remove(self._selected_point_layer)
+        return layers
+    
+    def _selected_layers(self, include_selected_point_layer: bool = False):
+        layers = [layer for layer in reversed(self.viewer.layers.selection)]
+        if not include_selected_point_layer:
+            if self._selected_point_layer in layers:
+                layers.remove(self._selected_point_layer)
         return layers
     
     def _image_layers(self):
@@ -484,17 +705,19 @@ class MainWidget(QTabWidget):
     def _points_layers(self, include_selected_point_layer: bool = False):
         layers = [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Points)]
         if not include_selected_point_layer:
-            if self.selected_point_layer in layers:
-                layers.remove(self.selected_point_layer)
+            if self._selected_point_layer in layers:
+                layers.remove(self._selected_point_layer)
         return layers
     
     def _image_layer_abspath(self, layer: Image) -> str | None:
         """
         """
-        abspath = os.path.abspath(layer.source.path)
+        abspath = None
+        if layer.source.path is not None:
+            abspath = os.path.abspath(layer.source.path)
         if abspath is None:
-            if 'image_absfilepath' in layer.metadata:
-                abspath = os.path.abspath(layer.metadata['image_absfilepath'])
+            if 'abspath' in layer.metadata:
+                abspath = os.path.abspath(layer.metadata['abspath'])
         return abspath
     
     def _on_layer_inserted(self, event: Event):
@@ -565,8 +788,12 @@ class MainWidget(QTabWidget):
                 plot.deleteLater()
         
         # selected projection point overlay
-        if self.selected_point_layer is layer:
-            self.selected_point_layer = None
+        if self._selected_point_layer is layer:
+            self._selected_point_layer = None
+            self.set_projection_point(None)
+        
+        # update layer selection lists
+        self._update_layer_selection_comboboxes(layer)
 
     def _on_layer_moved(self, event: Event):
         """ 
@@ -704,11 +931,15 @@ class MainWidget(QTabWidget):
                 layerpt_indexes = np.argsort(square_dists)
                 for index in layerpt_indexes:
                     if square_dists[index] <= radii[index]**2:
-                        self.set_projection_point(layer=layer, point_index=index)
+                        self.select_projection_point(layer, index)
                         return
             
+            # Did NOT click on an existing point.
+            # self._projection_point_index: int | None = None
+            self._projection_point_index_spinbox.clear()
+            
             # Use the mouse location as the projection point.
-            self.set_projection_point(worldpt2d=mouse_worldpt2d)
+            self.set_projection_point(mouse_worldpt2d)
 
     def _on_mouse_doubleclicked(self, viewer: Viewer, event: Event):
         """ 
@@ -717,13 +948,11 @@ class MainWidget(QTabWidget):
         pass
 
     def _apply_to_all_layers(self, func, *args, **kwargs):
-        layers = list(self.viewer.layers)
-        for layer in layers:
+        for layer in self._layers():
             func(layer, *args, **kwargs)
     
     def _apply_to_selected_layers(self, func, *args, **kwargs):
-        layers = list(self.viewer.layers.selection)
-        for layer in layers:
+        for layer in self._selected_layers():
             func(layer, *args, **kwargs)
     
     def _current_frame(self) -> int:
@@ -968,54 +1197,49 @@ class MainWidget(QTabWidget):
         self._find_colocalized_points_button.pressed.connect(self.find_colocalized_points)
 
         self._coloc_layer_combobox = QComboBox()
-        # self._coloc_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        self._coloc_layer_combobox.currentTextChanged.connect(lambda text: self._update_points_colocalization_plot())
         
         self._coloc_neighbors_layer_combobox = QComboBox()
-        # self._coloc_neighbors_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        self._coloc_neighbors_layer_combobox.currentTextChanged.connect(lambda text: self._update_points_colocalization_plot())
 
         self._coloc_nearest_neighbor_cutoff_spinbox = QDoubleSpinBox()
         self._coloc_nearest_neighbor_cutoff_spinbox.setSingleStep(0.5)
         self._coloc_nearest_neighbor_cutoff_spinbox.setValue(self._point_size_spinbox.value() / 2)
+
+        self._coloc_hist_binwidth_spinbox = QDoubleSpinBox()
+        self._coloc_hist_binwidth_spinbox.setMinimum(1)
+        self._coloc_hist_binwidth_spinbox.setValue(self._point_size_spinbox.value() / 2)
+        self._coloc_hist_binwidth_spinbox.valueChanged.connect(lambda value: self._update_points_colocalization_plot())
 
         self._coloc_plot = self._new_plot()
         self._coloc_plot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
         legend = pg.LegendItem()
         legend.setParentItem(self._coloc_plot.getPlotItem())
         legend.anchor((1,0), (1,0))
-        self._within_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="within layers", 
-            stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80))
-        self._between_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="between layers", 
-            stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80))
+        self._within_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="within layers", stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80))
+        self._between_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="between layers", stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80))
         self._coloc_plot.addItem(self._within_layers_nearest_neighbors_histogram)
         self._coloc_plot.addItem(self._between_layers_nearest_neighbors_histogram)
         legend.addItem(self._within_layers_nearest_neighbors_histogram, "within layers")
         legend.addItem(self._between_layers_nearest_neighbors_histogram, "between layers")
-
-        colocalize_group = QGroupBox()
-        form = QFormLayout(colocalize_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._find_colocalized_points_button)
-        form.addRow("Points layer", self._coloc_layer_combobox)
-        form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
-        form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
-        form.addRow(self._coloc_plot)
 
         self._point_projection_plots_layout: QVBoxLayout = QVBoxLayout()
         self._point_projection_plots_layout.setContentsMargins(0, 0, 0, 0)
         self._point_projection_plots_layout.setSpacing(0)
 
         self._projection_points_layer_combobox = QComboBox()
+        self._projection_points_layer_combobox.currentTextChanged.connect(lambda text: self.select_projection_point())
 
         self._projection_point_index_spinbox = QSpinBox()
+        self._projection_point_index_spinbox.valueChanged.connect(lambda value: self.select_projection_point())
 
         self._projection_point_world_label = QLabel()
-
         self._n_projection_points_label = QLabel()
 
         self._tag_filter_checkbox = QCheckBox("Tag filter")
-
+        
         self._tag_edit = QLineEdit()
+        self._tag_edit.editingFinished.connect(self.set_point_tags)
 
         self._tag_filter_edit = QLineEdit()
 
@@ -1029,7 +1253,7 @@ class MainWidget(QTabWidget):
                 form = QFormLayout(group)
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
-                form.addRow("Point size", self._point_size_spinbox)
+                form.addRow("Default point size", self._point_size_spinbox)
                 inner.addWidget(group)
             elif tab_title == "Find":
                 group = QGroupBox()
@@ -1049,8 +1273,9 @@ class MainWidget(QTabWidget):
                 form.addRow("Points layer", self._coloc_layer_combobox)
                 form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
                 form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
+                form.addRow("Histogram bin width", self._coloc_hist_binwidth_spinbox)
+                form.addRow(self._coloc_plot)
                 inner.addWidget(group)
-                inner.addWidget(self._coloc_plot)
             elif tab_title == "Projection":
                 grid = QGridLayout()
                 grid.setContentsMargins(0, 0, 0, 0)
@@ -1180,6 +1405,7 @@ class MainWidget(QTabWidget):
             points_layer_names = [layer.name for layer in self._points_layers()]
             self._refresh_combobox(self._coloc_layer_combobox, points_layer_names)
             self._refresh_combobox(self._coloc_neighbors_layer_combobox, points_layer_names)
+            self._refresh_combobox(self._projection_points_layer_combobox, points_layer_names)
     
     def _refresh_combobox(self, combobox: 'QComboBox', items: list[str]):
         current_text = combobox.currentText()
@@ -1191,6 +1417,66 @@ class MainWidget(QTabWidget):
                 combobox.setCurrentText(current_text)
             elif 0 <= current_index < len(items):
                 combobox.setCurrentIndex(current_index)
+    
+    def _update_points_colocalization_plot(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None, binwidth: float = None):
+        from scipy.spatial import distance
+
+        if layer is None:
+            layer_name = self._coloc_layer_combobox.currentText()
+            try:
+                layer = self.viewer.layers[layer_name]
+            except KeyError:
+                pass
+        if neighbors_layer is None:
+            neighbors_layer_name = self._coloc_neighbors_layer_combobox.currentText()
+            try:
+                neighbors_layer = self.viewer.layers[neighbors_layer_name]
+            except KeyError:
+                pass
+        if neighbors_layer is layer:
+            neighbors_layer = None
+        if nearest_neighbor_cutoff is None:
+            nearest_neighbor_cutoff = self._coloc_nearest_neighbor_cutoff_spinbox.value()
+        if binwidth is None:
+            binwidth = self._coloc_hist_binwidth_spinbox.value()
+        
+        if layer is not None:
+            points = self._transform_points2d_from_layer_to_world(layer.data[:,-2:], layer)
+            points_pairwise_distances = distance.squareform(distance.pdist(points))
+            np.fill_diagonal(points_pairwise_distances, np.inf)
+            points_nearest_neighbors = np.min(points_pairwise_distances, axis=1).flatten()
+            points_nearest_neighbors = points_nearest_neighbors[~np.isinf(points_nearest_neighbors)]
+        
+        if neighbors_layer is not None:
+            neighbors = self._transform_points2d_from_layer_to_world(neighbors_layer.data[:,-2:], neighbors_layer)
+            neighbors_pairwise_distances = distance.squareform(distance.pdist(neighbors))
+            np.fill_diagonal(neighbors_pairwise_distances, np.inf)
+            neighbors_nearest_neighbors = np.min(neighbors_pairwise_distances, axis=1).flatten()
+            neighbors_nearest_neighbors = neighbors_nearest_neighbors[~np.isinf(neighbors_nearest_neighbors)]
+
+        if layer is not None and neighbors_layer is not None:
+            within_layer_nearest_neighbors = np.concatenate([points_nearest_neighbors, neighbors_nearest_neighbors])
+            bin_edges = np.arange(0, np.max(within_layer_nearest_neighbors) + binwidth, binwidth)
+            counts, bin_edges = np.histogram(within_layer_nearest_neighbors, bins=bin_edges)
+            self._within_layers_nearest_neighbors_histogram.setData(bin_edges, counts)
+
+            between_layer_nearest_neighbors = np.min(np.linalg.norm(points[:, None, :] - neighbors[None, :, :], axis=-1), axis=1)
+            bin_edges = np.arange(0, np.max(between_layer_nearest_neighbors) + binwidth, binwidth)
+            counts, bin_edges = np.histogram(between_layer_nearest_neighbors, bins=bin_edges)
+            self._between_layers_nearest_neighbors_histogram.setData(bin_edges, counts)
+        elif layer is not None:
+            bin_edges = np.arange(0, np.max(points_nearest_neighbors) + binwidth, binwidth)
+            counts, bin_edges = np.histogram(points_nearest_neighbors, bins=bin_edges)
+            self._within_layers_nearest_neighbors_histogram.setData(bin_edges, counts)
+            self._between_layers_nearest_neighbors_histogram.setData([0, 0], [0])
+        elif neighbors_layer is not None:
+            bin_edges = np.arange(0, np.max(neighbors_nearest_neighbors) + binwidth, binwidth)
+            counts, bin_edges = np.histogram(neighbors_nearest_neighbors, bins=bin_edges)
+            self._within_layers_nearest_neighbors_histogram.setData(bin_edges, counts)
+            self._between_layers_nearest_neighbors_histogram.setData([0, 0], [0])
+        else:
+            self._within_layers_nearest_neighbors_histogram.setData([0, 0], [0])
+            self._between_layers_nearest_neighbors_histogram.setData([0, 0], [0])
 
 
 def slice_from_str(slice_str: str) -> tuple[slice]:
@@ -1316,6 +1602,17 @@ def find_image_peaks(image: np.ndarray, min_peak_height: float = None, min_peak_
     return points
 
 
+def find_colocalized_points(points: np.ndarray, neighbors: np.ndarray, nearest_neighbor_cutoff: float) -> np.ndarray:
+    pairwise_distances = np.linalg.norm(points[:, None, :] - neighbors[None, :, :], axis=-1)
+    nearest_neighbor_distances = pairwise_distances.min(axis=1)
+    points_indices = np.where(nearest_neighbor_distances <= nearest_neighbor_cutoff)[0]
+    n_points = points_indices.size
+    if n_points == 0:
+        return np.array([])
+    neighbors_indices = pairwise_distances[points_indices].reshape([n_points,-1]).argmin(axis=1)
+    colocalized_points = (points[points_indices] + neighbors[neighbors_indices]) / 2
+    return colocalized_points
+
 def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = None) -> np.ndarray:
     # project single pixel
     if (point_mask2d is None) or np.all(point_mask2d.shape == 1):
@@ -1346,27 +1643,33 @@ if __name__ == "__main__":
 
     viewer = Viewer()
     plugin = MainWidget(viewer)
-    viewer.window.add_dock_widget(plugin, name='CoSMoS-TS', area='right')
+    viewer.window.add_dock_widget(plugin, name='napari-cosmos-ts', area='right')
 
-    # from aicsimageio import AICSImage
-    # from aicsimageio.readers import BioformatsReader
-    # fp = "/Users/marcel/Downloads/img/ZMW_loc17_fcGFP_532nm_80mW_1_MMStack_Pos0.ome.tif"
-    # fp = "/Users/marcel/Downloads/img/fcGFP_637nm_60mW_1_MMStack_Default.ome.tif"
-    # # img = AICSImage(fp, reader=BioformatsReader)
-    # img = BioformatsReader(fp)
-    # img = tifffile.memmap(fp)
-    # img = viewer.open(path=fp, layer_type="image")[0].data
-    # print(img.shape)
+    # viewer.add_image(
+    #     np.random.random([1000, 512, 512]),
+    #     contrast_limits=[0.8, 1],
+    # )
 
-    # viewer.add_image(np.random.random([1000, 512, 512]))
+    # n_points = 100
+    # viewer.add_points(
+    #     np.random.random([n_points, 2]) * 512,
+    #     symbol = "disc",
+    #     size = [8] * n_points,
+    #     face_color = [[1, 1, 0, 0.1]] * n_points,
+    #     edge_color = [[1, 1, 0, 1]] * n_points,
+    #     opacity = 1,
+    #     blending = "translucent_no_depth",
+    # )
 
-    # fp = "/Users/marcel/Downloads/img/2019-08-22 Tax4-GFP posA-3 10nM fcGMP to fcGMP+10uM cGMP ex532nm60mW100ms.tif"
-    # viewer.open(path=fp, layer_type="image")
+    # n_points = 50
+    # viewer.add_points(
+    #     np.random.random([n_points, 2]) * 512,
+    #     symbol = "disc",
+    #     size = [8] * n_points,
+    #     face_color = [[1, 1, 0, 0.1]] * n_points,
+    #     edge_color = [[1, 1, 0, 1]] * n_points,
+    #     opacity = 1,
+    #     blending = "translucent_no_depth",
+    # )
 
     napari.run()
-
-    # im = np.random.random([5, 100, 512, 512])
-    # pt = np.array([[151.2, 256.3]])
-    # mask = np.ones([5, 5])
-    # z = project_image_point(im, pt, mask)
-    # print(z.shape)
