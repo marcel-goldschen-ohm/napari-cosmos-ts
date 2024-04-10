@@ -336,8 +336,14 @@ class MainWidget(QTabWidget):
             return
         
         # get current image or frame if layer is an image stack
-        fixed_image = fixed_layer.data[...,:,:]
-        moving_image = moving_layer.data[...,:,:]
+        fixed_image = fixed_layer.data
+        moving_image = moving_layer.data
+        if fixed_image.ndim > 2:
+            ind = self.viewer.dims.current_step[-fixed_image.ndim:-2]
+            fixed_image = fixed_image[*ind,:,:]
+        if moving_image.ndim > 2:
+            ind = self.viewer.dims.current_step[-moving_image.ndim:-2]
+            moving_image = moving_image[*ind,:,:]
 
         # adjust image to match layer contrast limits
         fixed_image = normalize_image(fixed_image, fixed_layer.contrast_limits)
@@ -371,6 +377,46 @@ class MainWidget(QTabWidget):
         # apply net world transform to moving points
         moving_layer.affine = tform @ fixed_layer.affine.affine_matrix[-3:,-3:]
     
+    def find_image_peaks(self, layer: Image, min_peak_height: float = None, min_peak_separation: float = None) -> Points:
+        """
+        """
+        if min_peak_height is None:
+            min_peak_height = self._min_peak_height_spinbox.value()
+        if min_peak_separation is None:
+            min_peak_separation = self._min_peak_separation_spinbox.value()
+        image = layer.data
+        if image.ndim > 2:
+            ind = self.viewer.dims.current_step[-image.ndim:-2]
+            image = image[*ind,:,:]
+        
+        points = find_image_peaks(image, min_peak_height, min_peak_separation)
+        n_points = len(points)
+
+        new_layer = self.viewer.add_points(
+            points,
+            name = layer.name + " (peaks)",
+            affine = layer.affine.affine_matrix[-3:,-3:],
+            symbol = "disc",
+            size = [self._point_size_spinbox.value()] * n_points,
+            face_color = [[1, 1, 0, 0.1]] * n_points,
+            edge_color = [[1, 1, 0, 1]] * n_points,
+            opacity = 1,
+            blending = "translucent_no_depth",
+        )
+        return new_layer
+
+    def find_colocalized_points(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None):
+        """
+        """
+        if layer is None:
+            layer_name = self._coloc_layer_combobox.currentText()
+            layer = self.viewer.layers[layer_name]
+        if neighbors_layer is None:
+            neighbors_layer_name = self._coloc_neighbors_layer_combobox.currentText()
+            neighbors_layer = self.viewer.layers[neighbors_layer_name]
+        if nearest_neighbor_cutoff is None:
+            nearest_neighbor_cutoff = self._coloc_nearest_neighbor_cutoff_spinbox.value()
+    
     def set_projection_point(self, worldpt2d: np.ndarray = None, layer: Points = None, point_index: int = None):
         """ 
         """
@@ -384,24 +430,43 @@ class MainWidget(QTabWidget):
             if self.selected_point_layer is not None:
                 self.viewer.layers.remove(self.selected_point_layer)
                 self.selected_point_layer = None
+            
+            # clear point projection plots
+            for metadata in self._layer_metadata:
+                if 'point_projection_data' in metadata:
+                    metadata['point_projection_data'].setData([])
+            
             return
+        
+        worldpt2d = np.array(worldpt2d).reshape([1, 2])
         
         # update selected projection point overlay
         if self.selected_point_layer is None:
             self.selected_point_layer = self.viewer.add_points(
                 worldpt2d,
                 name = "selected point",
-                # size = self._default_point_size_spinbox.value(),
                 symbol = "disc",
-                face_color = "cyan",
-                edge_color = "cyan",
-                # edge_width = self._default_point_edgewidth_spinbox.value(),
-                # edge_width_is_relative = False,
-                opacity = 0.7,
+                size = [self._point_size_spinbox.value()],
+                face_color = [[0, 1, 1, 0.1]],
+                edge_color = [[0, 1, 1, 1]],
+                opacity = 1,
                 blending = "translucent_no_depth",
             )
         else:
             self.selected_point_layer.data = worldpt2d
+        
+        # project selected point for all imagestack layers
+        point_size = int(np.round(self.selected_point_layer.size[0]))
+        point_mask = np.ones([point_size, point_size])
+        for layer, metadata in zip(self.viewer.layers, self._layer_metadata):
+            if isinstance(layer, Image) and layer.data.ndim == 3:
+                if 'point_projection_data' in metadata:
+                    # selected point in layer
+                    layerpt2d = self._transform_points2d_from_world_to_layer(worldpt2d, layer)
+                    # project point
+                    point_projection = project_image_point(layer.data, layerpt2d, point_mask)
+                    # update plot
+                    metadata['point_projection_data'].setData(point_projection)
     
     def _layers(self, include_selected_point_layer: bool = False):
         layers = [layer for layer in reversed(self.viewer.layers)]
@@ -414,7 +479,7 @@ class MainWidget(QTabWidget):
         return [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Image)]
     
     def _imagestack_layers(self):
-        return [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Image) and layer.data.ndim > 2]
+        return [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Image) and layer.data.ndim == 3]
     
     def _points_layers(self, include_selected_point_layer: bool = False):
         layers = [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Points)]
@@ -630,18 +695,15 @@ class MainWidget(QTabWidget):
             # Find closest visible point to mouse click.
             # If mouse is within the point, then select the point for projection.
             # Ignore the layer for the selected projection point.
-            visible_points_layers = [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Points) and layer.visible and layer.data.size > 0]
-            ignore_layer = getattr(self, '_selected_point_overlay_layer', None)
-            if ignore_layer in visible_points_layers:
-                visible_points_layers.remove(ignore_layer)
+            visible_points_layers = [layer for layer in self._points_layers() if layer.visible and layer.data.size > 0]
             for layer in visible_points_layers:
                 mouse_layerpt2d = self._transform_points2d_from_world_to_layer(mouse_worldpt2d, layer)
                 layerpts2d = layer.data[:,-2:]
-                layerptsizes = layer.size
+                radii = layer.size / 2
                 square_dists = np.sum((layerpts2d - mouse_layerpt2d)**2, axis=1)
                 layerpt_indexes = np.argsort(square_dists)
                 for index in layerpt_indexes:
-                    if square_dists[index] <= layerptsizes[index]**2:
+                    if square_dists[index] <= radii[index]**2:
                         self.set_projection_point(layer=layer, point_index=index)
                         return
             
@@ -663,17 +725,6 @@ class MainWidget(QTabWidget):
         layers = list(self.viewer.layers.selection)
         for layer in layers:
             func(layer, *args, **kwargs)
-    
-    # def _update_point_projection_plots(self):
-    #     """ 
-    #     """
-    #     plots = [metadata['point_projection_plot'] for metadata in self._layer_metadata if 'point_projection_plot' in metadata]
-        
-    #     # xlink
-    #     if plots:
-    #         plots[0].setXLink(None)
-    #     for i in range(1, len(plots)):
-    #         plots[i].setXLink(plots[0])
     
     def _current_frame(self) -> int:
         """ 
@@ -729,12 +780,13 @@ class MainWidget(QTabWidget):
     def _setup_ui(self):
         """ 
         """
+        from qtpy.QtWidgets import QScrollArea, QWidget, QHBoxLayout
+
         self._setup_metadata_tab()
         self._setup_file_tab()
-        self._setup_image_processing_tab()
-        self._setup_layer_registration_tab()
+        self._setup_image_tab()
         self._setup_points_tab()
-        self._setup_point_projections_tab()
+        self._setup_layer_registration_tab()
 
         # mimic layer insertion event in order to setup components for existing layers
         for i, layer in enumerate(self.viewer.layers):
@@ -750,42 +802,49 @@ class MainWidget(QTabWidget):
         self._notes_edit = QTextEdit()
 
         tab = QWidget()
-        tab_layout = QFormLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        tab_layout.addRow("Date", self._date_edit)
-        tab_layout.addRow("ID", self._id_edit)
-        tab_layout.addRow("User(s)", self._users_edit)
-        tab_layout.addRow("Notes", self._notes_edit)
+        form = QFormLayout(tab)
+        form.setContentsMargins(5, 5, 5, 5)
+        form.setSpacing(5)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.addRow("Date", self._date_edit)
+        form.addRow("ID", self._id_edit)
+        form.addRow("User(s)", self._users_edit)
+        form.addRow("Notes", self._notes_edit)
         self.addTab(tab, title)
 
     def _setup_file_tab(self, title: str = "File"):
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QWidget
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QLabel
+
+        msg = QLabel("!!! Session stores the relative path to each image stack file, NOT the data itself. It is up to you to maintain this file structure. !!!")
+        msg.setWordWrap(True)
 
         self._open_session_button = QPushButton("Open .mat session file")
-        self._open_session_button.clicked.connect(lambda checked: self.import_session())
+        self._open_session_button.pressed.connect(self.import_session)
 
         self._save_session_button = QPushButton("Save session as .mat file")
-        self._save_session_button.clicked.connect(lambda checked: self.export_session())
+        self._save_session_button.pressed.connect(self.export_session)
 
-        tab_inner_layout = QVBoxLayout()
-        tab_inner_layout.setContentsMargins(0, 0, 0, 0)
-        tab_inner_layout.setSpacing(5)
-        tab_inner_layout.addWidget(self._open_session_button)
-        tab_inner_layout.addWidget(self._save_session_button)
-        tab_inner_layout.addStretch()
+        inner = QVBoxLayout()
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(5)
+        inner.addWidget(msg)
+        inner.addSpacing(10)
+        inner.addWidget(self._open_session_button)
+        inner.addWidget(self._save_session_button)
+        inner.addStretch()
+
+        outer = QHBoxLayout()
+        outer.setContentsMargins(5, 5, 5, 5)
+        outer.setSpacing(5)
+        outer.addLayout(inner)
+        outer.addStretch()
 
         tab = QWidget()
-        tab_layout = QHBoxLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.addLayout(tab_inner_layout)
-        tab_layout.addStretch()
+        tab.setLayout(outer)
         self.addTab(tab, title)
     
-    def _setup_image_processing_tab(self, title: str = "Image"):
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QComboBox, QDoubleSpinBox, QLineEdit, QLabel
+    def _setup_image_tab(self, title: str = "Image"):
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QComboBox, QDoubleSpinBox, QLineEdit, QLabel, QTabWidget
 
         self._split_image_button = QPushButton("Split Image")
         self._split_image_button.pressed.connect(lambda: self._apply_to_selected_layers(self.split_image_layer))
@@ -819,68 +878,228 @@ class MainWidget(QTabWidget):
         self._tophat_filter_disk_radius_spinbox = QDoubleSpinBox()
         self._tophat_filter_disk_radius_spinbox.setValue(3)
 
-        usage_message = QLabel("Operations are applied to all selected image layers.\nResults are returned in new layers.")
-        usage_message.setWordWrap(True)
+        tab = QTabWidget()
+        for tab_title in ["Split", "Slice", "Project", "Filter"]:
+            msg = QLabel("Operations are applied to all selected image layers.\nResults are returned in new layers.")
+            msg.setWordWrap(True)
 
-        split_image_group = QGroupBox()
-        form = QFormLayout(split_image_group)
+            inner = QVBoxLayout()
+            inner.setContentsMargins(0, 0, 0, 0)
+            inner.setSpacing(5)
+            inner.addWidget(msg)
+            if tab_title == "Split":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._split_image_button)
+                form.addRow("regions", self._split_image_regions_combobox)
+                inner.addWidget(group)
+            elif tab_title == "Slice":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+                form.addRow(self._slice_image_button)
+                form.addRow("slice", self._slice_image_edit)
+                inner.addWidget(group)
+            elif tab_title == "Project":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._project_image_button)
+                form.addRow("projection", self._project_image_operation_combobox)
+                inner.addWidget(group)
+            elif tab_title == "Filter":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._gaussian_filter_button)
+                form.addRow("sigma", self._gaussian_filter_sigma_spinbox)
+                inner.addWidget(group)
+                
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._tophat_filter_button)
+                form.addRow("disk radius", self._tophat_filter_disk_radius_spinbox)
+                inner.addWidget(group)
+            inner.addStretch()
+
+            outer = QHBoxLayout()
+            outer.setContentsMargins(5, 5, 5, 5)
+            outer.setSpacing(5)
+            outer.addLayout(inner)
+            outer.addStretch()
+
+            tab2 = QWidget()
+            tab2.setLayout(outer)
+            tab.addTab(tab2, tab_title)
+
+        self.addTab(tab, title)
+    
+    def _setup_points_tab(self, title: str = "Points"):
+        """
+        """
+        from qtpy.QtCore import Qt
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit
+
+        self._point_size_spinbox = QDoubleSpinBox()
+        self._point_size_spinbox.setValue(8)
+
+        self._find_peaks_button = QPushButton("Find peaks in all selected image layers")
+        self._find_peaks_button.pressed.connect(lambda: self._apply_to_selected_layers(self.find_image_peaks))
+
+        self._min_peak_height_spinbox = QDoubleSpinBox()
+        self._min_peak_height_spinbox.setMinimum(0)
+        self._min_peak_height_spinbox.setMaximum(65000)
+        self._min_peak_height_spinbox.setValue(10)
+
+        self._min_peak_separation_spinbox = QDoubleSpinBox()
+        self._min_peak_separation_spinbox.setMinimum(1)
+        self._min_peak_separation_spinbox.setMaximum(65000)
+        self._min_peak_separation_spinbox.setValue(self._point_size_spinbox.value())
+
+        self._find_colocalized_points_button = QPushButton("Find colocalized points")
+        self._find_colocalized_points_button.pressed.connect(self.find_colocalized_points)
+
+        self._coloc_layer_combobox = QComboBox()
+        # self._coloc_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+        
+        self._coloc_neighbors_layer_combobox = QComboBox()
+        # self._coloc_neighbors_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
+
+        self._coloc_nearest_neighbor_cutoff_spinbox = QDoubleSpinBox()
+        self._coloc_nearest_neighbor_cutoff_spinbox.setSingleStep(0.5)
+        self._coloc_nearest_neighbor_cutoff_spinbox.setValue(self._point_size_spinbox.value() / 2)
+
+        self._coloc_plot = self._new_plot()
+        self._coloc_plot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
+        legend = pg.LegendItem()
+        legend.setParentItem(self._coloc_plot.getPlotItem())
+        legend.anchor((1,0), (1,0))
+        self._within_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="within layers", 
+            stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80))
+        self._between_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="between layers", 
+            stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80))
+        self._coloc_plot.addItem(self._within_layers_nearest_neighbors_histogram)
+        self._coloc_plot.addItem(self._between_layers_nearest_neighbors_histogram)
+        legend.addItem(self._within_layers_nearest_neighbors_histogram, "within layers")
+        legend.addItem(self._between_layers_nearest_neighbors_histogram, "between layers")
+
+        colocalize_group = QGroupBox()
+        form = QFormLayout(colocalize_group)
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
-        form.addRow(self._split_image_button)
-        form.addRow("regions", self._split_image_regions_combobox)
+        form.addRow(self._find_colocalized_points_button)
+        form.addRow("Points layer", self._coloc_layer_combobox)
+        form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
+        form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
+        form.addRow(self._coloc_plot)
 
-        slice_image_group = QGroupBox()
-        form = QFormLayout(slice_image_group)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._slice_image_button)
-        form.addRow("slice", self._slice_image_edit)
+        self._point_projection_plots_layout: QVBoxLayout = QVBoxLayout()
+        self._point_projection_plots_layout.setContentsMargins(0, 0, 0, 0)
+        self._point_projection_plots_layout.setSpacing(0)
 
-        project_image_group = QGroupBox()
-        form = QFormLayout(project_image_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._project_image_button)
-        form.addRow("projection", self._project_image_operation_combobox)
+        self._projection_points_layer_combobox = QComboBox()
 
-        gaussian_filter_group = QGroupBox()
-        form = QFormLayout(gaussian_filter_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._gaussian_filter_button)
-        form.addRow("sigma", self._gaussian_filter_sigma_spinbox)
+        self._projection_point_index_spinbox = QSpinBox()
 
-        tophat_filter_group = QGroupBox()
-        form = QFormLayout(tophat_filter_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._tophat_filter_button)
-        form.addRow("disk radius", self._tophat_filter_disk_radius_spinbox)
+        self._projection_point_world_label = QLabel()
 
-        tab_inner_layout = QVBoxLayout()
-        tab_inner_layout.setContentsMargins(0, 0, 0, 0)
-        tab_inner_layout.setSpacing(5)
-        tab_inner_layout.addWidget(usage_message)
-        tab_inner_layout.addWidget(split_image_group)
-        tab_inner_layout.addWidget(slice_image_group)
-        tab_inner_layout.addWidget(project_image_group)
-        tab_inner_layout.addWidget(gaussian_filter_group)
-        tab_inner_layout.addWidget(tophat_filter_group)
-        tab_inner_layout.addStretch()
+        self._n_projection_points_label = QLabel()
 
-        tab = QWidget()
-        tab_layout = QHBoxLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.addLayout(tab_inner_layout)
-        tab_layout.addStretch()
+        self._tag_filter_checkbox = QCheckBox("Tag filter")
+
+        self._tag_edit = QLineEdit()
+
+        self._tag_filter_edit = QLineEdit()
+
+        tab = QTabWidget()
+        for tab_title in ["Size", "Find", "Colocalize", "Projection"]:
+            inner = QVBoxLayout()
+            inner.setContentsMargins(0, 0, 0, 0)
+            inner.setSpacing(5)
+            if tab_title == "Size":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow("Point size", self._point_size_spinbox)
+                inner.addWidget(group)
+            elif tab_title == "Find":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._find_peaks_button)
+                form.addRow("Min peak height", self._min_peak_height_spinbox)
+                form.addRow("Min peak separation", self._min_peak_separation_spinbox)
+                inner.addWidget(group)
+            elif tab_title == "Colocalize":
+                group = QGroupBox()
+                form = QFormLayout(group)
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
+                form.addRow(self._find_colocalized_points_button)
+                form.addRow("Points layer", self._coloc_layer_combobox)
+                form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
+                form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
+                inner.addWidget(group)
+                inner.addWidget(self._coloc_plot)
+            elif tab_title == "Projection":
+                grid = QGridLayout()
+                grid.setContentsMargins(0, 0, 0, 0)
+                grid.setSpacing(5)
+                layer_label = QLabel("Points layer")
+                layer_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                index_label = QLabel("Point index")
+                index_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tag_label = QLabel("Tags")
+                tag_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(layer_label, 0, 0)
+                grid.addWidget(self._projection_points_layer_combobox, 0, 1)
+                grid.addWidget(self._n_projection_points_label, 0, 2)
+                grid.addWidget(self._tag_filter_checkbox, 0, 3)
+                grid.addWidget(self._tag_filter_edit, 0, 4)
+                grid.addWidget(index_label, 1, 0)
+                grid.addWidget(self._projection_point_index_spinbox, 1, 1)
+                grid.addWidget(self._projection_point_world_label, 1, 2)
+                grid.addWidget(tag_label, 1, 3)
+                grid.addWidget(self._tag_edit, 1, 4)
+                inner.addLayout(grid)
+                inner.addLayout(self._point_projection_plots_layout)
+            
+            if tab_title == "Projection":
+                tab2 = QWidget()
+                tab2.setLayout(inner)
+                tab.addTab(tab2, tab_title)
+            else:
+                inner.addStretch()
+
+                outer = QHBoxLayout()
+                outer.setContentsMargins(5, 5, 5, 5)
+                outer.setSpacing(5)
+                outer.addLayout(inner)
+                outer.addStretch()
+
+                tab2 = QWidget()
+                tab2.setLayout(outer)
+                tab.addTab(tab2, tab_title)
+
         self.addTab(tab, title)
     
     def _setup_layer_registration_tab(self, title: str = "Align"):
         """
         """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QComboBox, QPushButton, QLabel
+
+        msg = QLabel("Registration sets the layer transform without altering the layer data.")
+        msg.setWordWrap(True)
 
         self._fixed_layer_combobox = QComboBox()
         self._moving_layer_combobox = QComboBox()
@@ -901,9 +1120,6 @@ class MainWidget(QTabWidget):
         self._clear_layer_transform_button = QPushButton("Clear transform from all selected layers")
         self._clear_layer_transform_button.clicked.connect(lambda checked: self._apply_to_selected_layers(self._clear_layer_transform))
 
-        user_message = QLabel("Registration sets the layer affine transform without altering the layer data.")
-        user_message.setWordWrap(True)
-
         layer_registration_group = QGroupBox()
         form = QFormLayout(layer_registration_group)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -914,138 +1130,24 @@ class MainWidget(QTabWidget):
         form.addRow("moving Layer", self._moving_layer_combobox)
         form.addRow("transform", self._layer_transform_type_combobox)
 
-        tab_inner_layout = QVBoxLayout()
-        tab_inner_layout.setContentsMargins(0, 0, 0, 0)
-        tab_inner_layout.setSpacing(5)
-        tab_inner_layout.addWidget(user_message)
-        tab_inner_layout.addWidget(layer_registration_group)
-        tab_inner_layout.addWidget(self._copy_layer_transform_button)
-        tab_inner_layout.addWidget(self._paste_layer_transform_button)
-        tab_inner_layout.addWidget(self._clear_layer_transform_button)
-        tab_inner_layout.addStretch()
+        inner = QVBoxLayout()
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(5)
+        inner.addWidget(msg)
+        inner.addWidget(layer_registration_group)
+        inner.addWidget(self._copy_layer_transform_button)
+        inner.addWidget(self._paste_layer_transform_button)
+        inner.addWidget(self._clear_layer_transform_button)
+        inner.addStretch()
+
+        outer = QHBoxLayout()
+        outer.setContentsMargins(5, 5, 5, 5)
+        outer.setSpacing(5)
+        outer.addLayout(inner)
+        outer.addStretch()
 
         tab = QWidget()
-        tab_layout = QHBoxLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.addLayout(tab_inner_layout)
-        tab_layout.addStretch()
-        self.addTab(tab, title)
-    
-    def _setup_points_tab(self, title: str = "Points"):
-        """
-        """
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox
-
-        # self._default_point_size_spinbox = QSpinBox()
-        # self._default_point_size_spinbox.setValue(8)
-
-        # self._default_point_edgewidth_spinbox = QDoubleSpinBox()
-        # self._default_point_edgewidth_spinbox.setValue(1)
-        # self._default_point_edgewidth_spinbox.setSingleStep(0.25)
-        # self._default_point_edgewidth_spinbox.setDecimals(2)
-
-        # self._set_selected_point_edgewidth_button = QPushButton("Set edge width of selected points to default")
-
-        self._find_peaks_button = QPushButton("Find peaks in all selected image layers")
-        self._find_peaks_button.clicked.connect(lambda checked: self._apply_to_selected_layers(self.find_image_peaks))
-
-        self._min_peak_height_spinbox = QDoubleSpinBox()
-        self._min_peak_height_spinbox.setMinimum(0)
-        self._min_peak_height_spinbox.setMaximum(65000)
-        self._min_peak_height_spinbox.setValue(10)
-
-        self._min_peak_separation_spinbox = QDoubleSpinBox()
-        self._min_peak_separation_spinbox.setMinimum(1)
-        self._min_peak_separation_spinbox.setMaximum(65000)
-        self._min_peak_separation_spinbox.setValue(5)
-
-        self._find_colocalized_points_button = QPushButton("Find colocalized points")
-        self._find_colocalized_points_button.clicked.connect(lambda checked: self.find_colocalized_points())
-
-        self._coloc_layer_combobox = QComboBox()
-        # self._coloc_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
-        
-        self._coloc_neighbors_layer_combobox = QComboBox()
-        # self._coloc_neighbors_layer_combobox.currentTextChanged.connect(self.updateRoisColocalizationPlot)
-
-        self._coloc_nearest_neighbor_cutoff_spinbox = QDoubleSpinBox()
-        self._coloc_nearest_neighbor_cutoff_spinbox.setMinimum(0)
-        self._coloc_nearest_neighbor_cutoff_spinbox.setMaximum(1000)
-        self._coloc_nearest_neighbor_cutoff_spinbox.setSingleStep(0.5)
-        self._coloc_nearest_neighbor_cutoff_spinbox.setDecimals(2)
-        self._coloc_nearest_neighbor_cutoff_spinbox.setValue(5)
-
-        self._coloc_plot = self._new_plot()
-        self._coloc_plot.setLabels(left="Counts", bottom="Nearest Neighbor Distance")
-        legend = pg.LegendItem()
-        legend.setParentItem(self._coloc_plot.getPlotItem())
-        legend.anchor((1,0), (1,0))
-        self._within_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="within layers", 
-            stepMode='center', pen=pg.mkPen([98, 143, 176, 80], width=1), fillLevel=0, brush=(98, 143, 176, 80))
-        self._between_layers_nearest_neighbors_histogram = pg.PlotCurveItem([0, 0], [0], name="between layers", 
-            stepMode='center', pen=pg.mkPen([255, 0, 0, 80], width=1), fillLevel=0, brush=(255, 0, 0, 80))
-        self._coloc_plot.addItem(self._within_layers_nearest_neighbors_histogram)
-        self._coloc_plot.addItem(self._between_layers_nearest_neighbors_histogram)
-        legend.addItem(self._within_layers_nearest_neighbors_histogram, "within layers")
-        legend.addItem(self._between_layers_nearest_neighbors_histogram, "between layers")
-
-        # points_group = QGroupBox()
-        # form = QFormLayout(points_group)
-        # form.setContentsMargins(5, 5, 5, 5)
-        # form.setSpacing(5)
-        # form.addRow("Default point size", self._default_point_size_spinbox)
-        # form.addRow("Default point edge width", self._default_point_edgewidth_spinbox)
-        # form.addRow(self._set_selected_point_edgewidth_button)
-
-        find_peaks_group = QGroupBox()
-        form = QFormLayout(find_peaks_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._find_peaks_button)
-        form.addRow("Min peak height", self._min_peak_height_spinbox)
-        form.addRow("Min separation", self._min_peak_separation_spinbox)
-
-        colocalize_group = QGroupBox()
-        form = QFormLayout(colocalize_group)
-        form.setContentsMargins(5, 5, 5, 5)
-        form.setSpacing(5)
-        form.addRow(self._find_colocalized_points_button)
-        form.addRow("Points layer", self._coloc_layer_combobox)
-        form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
-        form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
-        form.addRow(self._coloc_plot)
-
-        tab_inner_layout = QVBoxLayout()
-        tab_inner_layout.setContentsMargins(0, 0, 0, 0)
-        tab_inner_layout.setSpacing(5)
-        # tab_inner_layout.addWidget(points_group)
-        tab_inner_layout.addWidget(find_peaks_group)
-        tab_inner_layout.addWidget(colocalize_group)
-        tab_inner_layout.addStretch()
-
-        tab = QWidget()
-        tab_layout = QHBoxLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.addLayout(tab_inner_layout)
-        tab_layout.addStretch()
-        self.addTab(tab, title)
-    
-    def _setup_point_projections_tab(self, title: str = "Point Z-Proj"):
-        """ 
-        """
-        from qtpy.QtWidgets import QVBoxLayout, QWidget
-
-        self._point_projection_plots_layout: QVBoxLayout = QVBoxLayout()
-        self._point_projection_plots_layout.setContentsMargins(0, 0, 0, 0)
-        self._point_projection_plots_layout.setSpacing(0)
-
-        tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
-        tab_layout.setContentsMargins(5, 5, 5, 5)
-        tab_layout.setSpacing(5)
-        tab_layout.addLayout(self._point_projection_plots_layout)
+        tab.setLayout(outer)
         self.addTab(tab, title)
     
     def _new_plot(self):
@@ -1192,17 +1294,62 @@ def register_points(fixed_points: np.ndarray, moving_points: np.ndarray, transfo
         return tform
 
 
+def find_image_peaks(image: np.ndarray, min_peak_height: float = None, min_peak_separation: float = 3) -> np.ndarray:
+    from skimage import morphology, measure
+
+    pixel_radius = max(1, np.ceil(min_peak_separation / 2))
+    if min_peak_height is None:
+        peak_mask = morphology.local_maxima(image, connectivity=pixel_radius, indices=False, allow_borders=False)
+    else:
+        disk = morphology.disk(pixel_radius)
+        peak_mask = morphology.h_maxima(image, h=min_peak_height, footprint=disk) > 0
+        peak_mask[:,0] = False
+        peak_mask[0,:] = False
+        peak_mask[:,-1] = False
+        peak_mask[-1,:] = False
+    label_image = measure.label(peak_mask)
+    rois = measure.regionprops(label_image)
+    n_rois = len(rois)
+    points = np.zeros((n_rois, 2))
+    for i, roi in enumerate(rois):
+        points[i] = roi.centroid
+    return points
+
+
+def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = None) -> np.ndarray:
+    # project single pixel
+    if (point_mask2d is None) or np.all(point_mask2d.shape == 1):
+        row, col = np.round(point2d).astype(int).flatten()
+        try:
+            return np.squeeze(image[...,row,col])
+        except IndexError:
+            return np.array([])
+    
+    # project mean of pixels in mask
+    row, col = point2d.flatten()
+    h, w = point_mask2d.shape
+    rows = np.round(row - h/2 + np.arange(h)).astype(int)
+    cols = np.round(col - w/2 + np.arange(w)).astype(int)
+    i = np.where((rows >= 0) & (rows < image.shape[-2]))[0]
+    j = np.where((cols >= 0) & (cols < image.shape[-1]))[0]
+    if i.size == 0 or j.size == 0:
+        return np.array([])
+    rows = rows[i].reshape([-1,1])
+    cols = cols[j].reshape([1,-1])
+    mask = point_mask2d[i.reshape([-1,1]),j.reshape([1,-1])]
+    mask = mask.reshape((1,) * (image.ndim - 2) + mask.shape)
+    return np.squeeze(np.mean(image[...,rows,cols] * mask, axis=(-2, -1)))
+
+
 if __name__ == "__main__":
     import napari
 
     viewer = Viewer()
-
     plugin = MainWidget(viewer)
     viewer.window.add_dock_widget(plugin, name='CoSMoS-TS', area='right')
 
     # from aicsimageio import AICSImage
     # from aicsimageio.readers import BioformatsReader
-    # fp = "/Users/marcel/Downloads/img/2019-08-22 Tax4-GFP posA-3 10nM fcGMP to fcGMP+10uM cGMP ex532nm60mW100ms.tif"
     # fp = "/Users/marcel/Downloads/img/ZMW_loc17_fcGFP_532nm_80mW_1_MMStack_Pos0.ome.tif"
     # fp = "/Users/marcel/Downloads/img/fcGFP_637nm_60mW_1_MMStack_Default.ome.tif"
     # # img = AICSImage(fp, reader=BioformatsReader)
@@ -1210,7 +1357,16 @@ if __name__ == "__main__":
     # img = tifffile.memmap(fp)
     # img = viewer.open(path=fp, layer_type="image")[0].data
     # print(img.shape)
-    viewer.add_image(np.random.random([1000, 512, 512]))
+
+    # viewer.add_image(np.random.random([1000, 512, 512]))
+
+    # fp = "/Users/marcel/Downloads/img/2019-08-22 Tax4-GFP posA-3 10nM fcGMP to fcGMP+10uM cGMP ex532nm60mW100ms.tif"
     # viewer.open(path=fp, layer_type="image")
 
     napari.run()
+
+    # im = np.random.random([5, 100, 512, 512])
+    # pt = np.array([[151.2, 256.3]])
+    # mask = np.ones([5, 5])
+    # z = project_image_point(im, pt, mask)
+    # print(z.shape)
