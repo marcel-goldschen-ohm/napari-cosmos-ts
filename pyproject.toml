@@ -7,10 +7,16 @@ authors = [
 ]
 dependencies = [
     "napari>=0.4.19.post1",
+    "pyqtgraph>=0.13.4",
+    "pystackreg>=0.2.7",
+    "pycpd>=2.0.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+
+[project.entry-points."napari.manifest"]
+napari-cosmos-ts = "napari_cosmos_ts:napari.yaml"
 
 [build-system]
 requires = ["pdm-backend"]
@@ -18,9 +24,6 @@ build-backend = "pdm.backend"
 
 [tool.pdm]
 distribution = true
-
-[project.entry-points."napari.manifest"]
-napari-cosmos-ts = "napari_cosmos_ts:napari.yaml"
 
 [tool.pdm.package-data]
 napari-cosmos-ts = [

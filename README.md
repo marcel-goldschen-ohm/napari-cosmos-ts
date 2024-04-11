@@ -1,23 +1,28 @@
 # napari-cosmos-ts
-[napari](https://napari.org/stable/) plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS)
+[napari](https://napari.org/stable/) plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS) analysis.
 
 # Install
-1. Install [Miniconda](https://docs.conda.io/en/main/miniconda.html). Simplest is to download and run the installer. This will get you the conda package manager.
-2. Install [napari](https://napari.org/stable/). The following recommended method may change, so you should check the napari website. The following creates a sandboxed environment for napari with python, then activates that environement in conda, then installs napari into the environement (pip is automatically installed along with python). In a command shell or terminal run the following three commands:
+1. Install the `conda` package manager. Simplest is to download [Miniconda](https://docs.conda.io/en/main/miniconda.html) and run the installer.
+2. Create a virtual python environment named `napari-env` (or name it whatever you want) in which to install [napari](https://napari.org/stable/) and this plugin. In a command shell or terminal run the following command:
+```shell
+conda create --name napari-env python
 ```
-conda create -y -n napari-env -c conda-forge python=3.9
+3. Activate your virtual environment. *!!! Note you will have to do this every time you open a new command shell or terminal.* In a command shell or terminal run the following command:
+```shell
 conda activate napari-env
-pip install "napari[all]"
 ```
-3. Install [tifffile](https://github.com/cgohlke/tifffile), [pyqtgraph](https://www.pyqtgraph.org), [pystackreg](https://pystackreg.readthedocs.io/en/latest/readme.html#installation), and [pycpd](https://github.com/siavashk/pycpd). Note that pystackreg and pycpd are optional and only used for image and point registration. Several other packages are also needed including numpy, scipy, pandas, and scikit-image, but these should already be installed along with napari. If for some reason they are not you can install them with conda similar to that shown below. In a command shell or terminal run the following three commands:
+4. Install `napari` and `napari-cosmos-ts` into your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
+```shell
+pip install "napari[all]" napari-cosmos-ts
 ```
+
+# Run
+1. Activate your virtual environment (see [Install](#install), replace napari-env with the name of your environment). In a command shell or terminal run the following command:
+```shell
 conda activate napari-env
-conda install -c conda-forge tifffile pyqtgraph pystackreg
-pip install pycpd
 ```
-4. Download `napari_cosmos_ts.py` from this repository.
-5. Run `napari_cosmos_ts.py`. In a command shell or terminal run the following two commands:
+2. Launch the `napari` viewer. In a command shell or terminal *where you have activated your virtual environment* run the following command:
+```shell
+napari
 ```
-conda activate napari-env
-python your/path/to/napari_cosmos_ts.py
-```
+3. Launch the `napari-cosmos-ts` plugin. From the napari viewer `Plugins menu`, select `Colocalization Single-Molecule Time Series (napari-cosmos-ts)`. This should bring up a docked widget within the viewer. **Now you are good to go!**

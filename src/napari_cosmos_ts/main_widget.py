@@ -1,8 +1,4 @@
 """
-TODO:
-- implement tag filter
-- fix bug: import creates extra selected point layer?
-- implement idealization?
 """
 
 import os
@@ -230,8 +226,12 @@ class MainWidget(QTabWidget):
         if self._selected_point_layer is not None:
             self.set_projection_point(self._selected_point_layer.data)
     
-    def split_image_layer(self, layer: Image, regions: str = None):
-        """
+    def split_image_layer(self, layer: Image, regions: str = None) -> list[Image]:
+        """ Split image horizontally, vertically, or into quadrants.
+
+        Return each split as a new layer.
+
+        If the original image layer reflects a source image file, the split layers will keep track of the file path and slice in their metadata.
         """
         if not isinstance(layer, Image):
             return
@@ -290,7 +290,9 @@ class MainWidget(QTabWidget):
         return new_layers
 
     def slice_image_layer(self, layer: Image, image_slice: tuple[slice] = None) -> Image:
-        """
+        """ Return a slice of an image as a new layer.
+
+        If the original image layer reflects a source image file, the split layers will keep track of the file path and slice in their metadata.
         """
         if not isinstance(layer, Image):
             return
@@ -319,7 +321,7 @@ class MainWidget(QTabWidget):
         return new_layer
     
     def project_image_layer(self, layer: Image, operation: str = None) -> Image:
-        """
+        """ Return a projection of an image as a new layer.
         """
         if not isinstance(layer, Image):
             return
@@ -346,7 +348,7 @@ class MainWidget(QTabWidget):
         return new_layer
     
     def filter_image_layer(self, layer: Image, filter_type: str, **kwargs) -> Image:
-        """
+        """ Return a filtered image as a new layer.
         """
         if not isinstance(layer, Image):
             return
@@ -389,10 +391,10 @@ class MainWidget(QTabWidget):
         return new_layer
     
     def register_layers(self, fixed_layer: Layer = None, moving_layer: Layer = None, transform_type: str = None):
-        """
-        """
-        from qtpy.QtWidgets import QMessageBox
+        """ Set transformation of moving layer to align moving layer to fixed layer.
 
+        Implements both image and points registration.
+        """
         if fixed_layer is None:
             fixed_layer_name = self._fixed_layer_combobox.currentText()
             fixed_layer = self.viewer.layers[fixed_layer_name]
@@ -404,6 +406,7 @@ class MainWidget(QTabWidget):
         transform_type = transform_type.lower()
 
         if fixed_layer is moving_layer:
+            from qtpy.QtWidgets import QMessageBox
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setText("Cannot register a layer with itself.")
@@ -415,6 +418,7 @@ class MainWidget(QTabWidget):
         elif isinstance(fixed_layer, Points) and isinstance(moving_layer, Points):
             self.register_points_layers(fixed_layer, moving_layer, transform_type)
         else:
+            from qtpy.QtWidgets import QMessageBox
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setText("Only image-image or points-points layer registration implemented.")
@@ -422,11 +426,14 @@ class MainWidget(QTabWidget):
             msg.exec()
 
     def register_image_layers(self, fixed_layer: Image, moving_layer: Image, transform_type: str = "affine"):
-        """
+        """ Set transformation of moving layer to align moving image to fixed image.
+
+        Uses pystackreg for image registration.
         """
         try:
             from pystackreg import StackReg
         except ImportError:
+            from qtpy.QtWidgets import QMessageBox
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setText("Image registration requires pystackreg package.")
@@ -455,11 +462,14 @@ class MainWidget(QTabWidget):
         moving_layer.affine = tform @ fixed_layer.affine.affine_matrix[-3:,-3:]
 
     def register_points_layers(self, fixed_layer: Points, moving_layer: Points, transform_type: str = "affine"):
-        """
+        """ Set transformation of moving layer to align moving points to fixed points.
+
+        Uses pycpd for point registration.
         """
         try:
             from pycpd import RigidRegistration, AffineRegistration
         except ImportError:
+            from qtpy.QtWidgets import QMessageBox
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Warning)
             msg.setText("Image registration requires pycpd package.")
@@ -477,7 +487,9 @@ class MainWidget(QTabWidget):
         moving_layer.affine = tform @ fixed_layer.affine.affine_matrix[-3:,-3:]
     
     def find_image_peaks(self, layer: Image, min_peak_height: float = None, min_peak_separation: float = None) -> Points:
-        """
+        """ Return position of local peaks in image as new points layer.
+
+        Uses the current visible frame for image stacks.
         """
         if min_peak_height is None:
             min_peak_height = self._min_peak_height_spinbox.value()
@@ -505,7 +517,9 @@ class MainWidget(QTabWidget):
         return new_layer
 
     def find_colocalized_points(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None) -> Points:
-        """
+        """ Return new points layer with colocalized points between two input points layers.
+
+        For each pair of colocalized points, their mean position is returned.
         """
         if layer is None:
             layer_name = self._coloc_layer_combobox.currentText()
@@ -546,7 +560,9 @@ class MainWidget(QTabWidget):
         return new_layer
     
     def set_projection_point(self, worldpt2d: np.ndarray | None):
-        """ 
+        """ Set the world position for the currently visible point projections.
+
+        This will update the point projection plots for all image stack layers.
         """
         if worldpt2d is None:
             # clear selected projection point overlay
@@ -604,7 +620,12 @@ class MainWidget(QTabWidget):
                     metadata['point_projection_data'].setData(point_projection)
     
     def select_projection_point(self, layer: Points = None, point_index: int = None):
+        """ Select an existing point to use as the position for the currently visible point projections.
+
+        The selected point will be used for projection in all image stack layers.
+        """
         # add guard because blockSignals() does not work for QSpinBox.valueChanged
+        # and we don't want to trigger this function recursively in an infinite loop
         if getattr(self, '_select_projection_point_in_progress', False):
             return
         self._select_projection_point_in_progress = True
@@ -652,9 +673,6 @@ class MainWidget(QTabWidget):
             except (KeyError, IndexError):
                 tags = ""
             self._tag_edit.setText(tags)
-
-        # self._projection_point_layer: Points | None = layer
-        # self._projection_point_index: int | None = point_index
         
         self._projection_points_layer_combobox.blockSignals(False)
         self._projection_point_index_spinbox.blockSignals(False)
@@ -663,6 +681,10 @@ class MainWidget(QTabWidget):
         self._select_projection_point_in_progress = False
     
     def set_point_tags(self, layer: Points = None, point_index: int = None, tags: str = None):
+        """ Set tags for a point.
+
+        The tags string will be stored in the 'tags' feature column of the layer.
+        """
         if layer is None:
             layer_name = self._projection_points_layer_combobox.currentText()
             try:
@@ -683,6 +705,12 @@ class MainWidget(QTabWidget):
         layer.features.loc[point_index, 'tags'] = tags
     
     def _layers(self, include_selected_point_layer: bool = False):
+        """ Return a list of all layers.
+
+        Layer order is reversed so that the list corresponds to the layers in top-to-bottom order as seen in the viewer.
+
+        By default, the selected point layer is excluded from the list.
+        """
         layers = [layer for layer in reversed(self.viewer.layers)]
         if not include_selected_point_layer:
             if self._selected_point_layer in layers:
@@ -690,27 +718,33 @@ class MainWidget(QTabWidget):
         return layers
     
     def _selected_layers(self, include_selected_point_layer: bool = False):
-        layers = [layer for layer in reversed(self.viewer.layers.selection)]
-        if not include_selected_point_layer:
-            if self._selected_point_layer in layers:
-                layers.remove(self._selected_point_layer)
-        return layers
+        """ Return a list of all selected layers.
+
+        By default, the selected point layer is excluded from the list.
+        """
+        return [layer for layer in self._layers(include_selected_point_layer) if layer in self.viewer.layers.selection]
     
     def _image_layers(self):
-        return [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Image)]
+        """ Return a list of image layers.
+        """
+        return [layer for layer in self._layers() if isinstance(layer, Image)]
     
     def _imagestack_layers(self):
-        return [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Image) and layer.data.ndim == 3]
+        """ Return a list of image stack layers.
+        """
+        return [layer for layer in self._layers() if isinstance(layer, Image) and layer.data.ndim == 3]
     
     def _points_layers(self, include_selected_point_layer: bool = False):
-        layers = [layer for layer in reversed(self.viewer.layers) if isinstance(layer, Points)]
-        if not include_selected_point_layer:
-            if self._selected_point_layer in layers:
-                layers.remove(self._selected_point_layer)
-        return layers
+        """ Return a list of points layers.
+
+        By default, the selected point layer is excluded from the list.
+        """
+        return [layer for layer in self._layers(include_selected_point_layer) if isinstance(layer, Points)]
     
     def _image_layer_abspath(self, layer: Image) -> str | None:
-        """
+        """ Return the source image file path.
+
+        It is not possible to set the layer.source.path attribute directly, so in some cases the path may be stored in the layer metadata.
         """
         abspath = None
         if layer.source.path is not None:
@@ -721,7 +755,7 @@ class MainWidget(QTabWidget):
         return abspath
     
     def _on_layer_inserted(self, event: Event):
-        """ 
+        """ Callback for layer insertion event.
         """
         from qtpy.QtGui import QColor
         from qtpy.QtCore import QSize
@@ -771,7 +805,7 @@ class MainWidget(QTabWidget):
         layer.events.mode.connect(self._on_layer_mode_changed)
 
     def _on_layer_removed(self, event: Event):
-        """ 
+        """ Callback for layer removal event.
         """
         layer = event.value
         layer_index = event.index
@@ -796,7 +830,7 @@ class MainWidget(QTabWidget):
         self._update_layer_selection_comboboxes(layer)
 
     def _on_layer_moved(self, event: Event):
-        """ 
+        """ Callback for layer move event.
         """
         layer = event.value
         old_layer_index = event.index
@@ -820,7 +854,7 @@ class MainWidget(QTabWidget):
         self._update_layer_selection_comboboxes(layer)
 
     def _on_layer_name_changed(self, event: Event):
-        """ 
+        """ Callback for layer name change event.
         """
         layer_index = event.index
         layer = self.viewer.layers[layer_index]
@@ -837,7 +871,7 @@ class MainWidget(QTabWidget):
         self._update_layer_selection_comboboxes(layer)
 
     def _on_layer_visibility_changed(self, event: Event):
-        """ 
+        """ Callback for layer visibility change event.
         """
         layer_index = event.index
         layer = self.viewer.layers[layer_index]
@@ -851,6 +885,8 @@ class MainWidget(QTabWidget):
                 plot.setVisible(layer.visible)
 
     def _on_layer_mode_changed(self, event: Event):
+        """ Callback for layer mode change event.
+        """
         layer_index = event.index
         layer = self.viewer.layers[layer_index]
         metadata = self._layer_metadata[layer_index]
@@ -875,7 +911,7 @@ class MainWidget(QTabWidget):
                     layer.data = np.squeeze(layer.data, axis=tuple(range(npad)))
     
     def _on_dim_step_changed(self, event: Event):
-        """ 
+        """ Callback for frame change event.
         """
         try:
             # [frame, row, col]
@@ -890,7 +926,7 @@ class MainWidget(QTabWidget):
                 vline.setValue(frame)
 
     def _on_mouse_clicked_or_dragged(self, viewer: Viewer, event: Event):
-        """ 
+        """ Callback for mouse press/drag/release events.
         """
         if viewer.layers.selection.active.mode != "pan_zoom":
             return
@@ -942,21 +978,29 @@ class MainWidget(QTabWidget):
             self.set_projection_point(mouse_worldpt2d)
 
     def _on_mouse_doubleclicked(self, viewer: Viewer, event: Event):
-        """ 
+        """ Callabck for mouse double-click event.
         """
         # viewer.reset_view()
         pass
 
     def _apply_to_all_layers(self, func, *args, **kwargs):
+        """ Apply a function to all layers.
+
+        The function should take a layer as its first argument.
+        """
         for layer in self._layers():
             func(layer, *args, **kwargs)
     
     def _apply_to_selected_layers(self, func, *args, **kwargs):
+        """ Apply a function to selected layers.
+
+        The function should take a layer as its first argument.
+        """
         for layer in self._selected_layers():
             func(layer, *args, **kwargs)
     
     def _current_frame(self) -> int:
-        """ 
+        """ Return the current frame index.
         """
         try:
             return self.viewer.dims.current_step[-3]
@@ -964,23 +1008,25 @@ class MainWidget(QTabWidget):
             return 0
     
     def _copy_active_layer_transform(self):
-        """
+        """ Copy the active layer transform.
         """
         layer: Layer = self.viewer.layers.selection.active
         self._copied_layer_transform = layer.affine
     
     def _paste_copied_layer_transform(self, layer: Layer):
-        """
+        """ Set the layer transform to the copied transform.
         """
         if hasattr(self, '_copied_layer_transform'):
             layer.affine = self._copied_layer_transform
     
     def _clear_layer_transform(self, layer: Layer):
-        """
+        """ Clear the layer transform.
         """
         layer.affine = np.eye(layer.ndim)
     
     def _transform_points2d_from_layer_to_world(self, layerpts2d: np.ndarray, layer: Layer) -> np.ndarray:
+        """ Transform points from layer to world coordinates.
+        """
         layerpts2d = np.array(layerpts2d).reshape([-1, 2])
         if layer.ndim == 2:
             layerpts = layerpts2d
@@ -994,6 +1040,8 @@ class MainWidget(QTabWidget):
         return worldpts2d
 
     def _transform_points2d_from_world_to_layer(self, worldpts2d: np.ndarray, layer: Layer) -> np.ndarray:
+        """ Transform points from world to layer coordinates.
+        """
         worldpts2d = np.array(worldpts2d).reshape([-1, 2])
         if layer.ndim == 2:
             worldpts = worldpts2d
@@ -1007,10 +1055,8 @@ class MainWidget(QTabWidget):
         return layerpts2d
     
     def _setup_ui(self):
-        """ 
+        """ Setup the main widget UI.
         """
-        from qtpy.QtWidgets import QScrollArea, QWidget, QHBoxLayout
-
         self._setup_metadata_tab()
         self._setup_file_tab()
         self._setup_image_tab()
@@ -1023,6 +1069,10 @@ class MainWidget(QTabWidget):
             self._on_layer_inserted(event)
     
     def _setup_metadata_tab(self, title: str = "Meta"):
+        """ Metadata UI.
+
+        Includes session date, ID, users, and notes.
+        """
         from qtpy.QtWidgets import QFormLayout, QLineEdit, QTextEdit, QWidget
 
         self._date_edit = QLineEdit()
@@ -1037,11 +1087,15 @@ class MainWidget(QTabWidget):
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.addRow("Date", self._date_edit)
         form.addRow("ID", self._id_edit)
-        form.addRow("User(s)", self._users_edit)
+        form.addRow("Users", self._users_edit)
         form.addRow("Notes", self._notes_edit)
         self.addTab(tab, title)
 
     def _setup_file_tab(self, title: str = "File"):
+        """ File UI.
+
+        Includes session import/export.
+        """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QLabel
 
         msg = QLabel("!!! Session stores the relative path to each image stack file, NOT the data itself. It is up to you to maintain this file structure. !!!")
@@ -1073,6 +1127,10 @@ class MainWidget(QTabWidget):
         self.addTab(tab, title)
     
     def _setup_image_tab(self, title: str = "Image"):
+        """ Image UI.
+
+        Includes image processing operations such as splitting, slicing, projecting, and filtering.
+        """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QComboBox, QDoubleSpinBox, QLineEdit, QLabel, QTabWidget
 
         self._split_image_button = QPushButton("Split Image")
@@ -1172,7 +1230,9 @@ class MainWidget(QTabWidget):
         self.addTab(tab, title)
     
     def _setup_points_tab(self, title: str = "Points"):
-        """
+        """ Points UI.
+
+        Includes point settings, colocalization, and point projection.
         """
         from qtpy.QtCore import Qt
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit
@@ -1319,7 +1379,7 @@ class MainWidget(QTabWidget):
         self.addTab(tab, title)
     
     def _setup_layer_registration_tab(self, title: str = "Align"):
-        """
+        """ Layer registration UI.
         """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QComboBox, QPushButton, QLabel
 
@@ -1376,6 +1436,8 @@ class MainWidget(QTabWidget):
         self.addTab(tab, title)
     
     def _new_plot(self):
+        """ Return new plot object with default settings.
+        """
         from qtpy.QtGui import QColor
         from qtpy.QtCore import QSize
 
@@ -1397,6 +1459,8 @@ class MainWidget(QTabWidget):
         return plot
     
     def _update_layer_selection_comboboxes(self, changed_layer: Layer = None):
+        """ Update all UI combo boxes for layer selection.
+        """
         layer_names = [layer.name for layer in self._layers()]
         self._refresh_combobox(self._fixed_layer_combobox, layer_names)
         self._refresh_combobox(self._moving_layer_combobox, layer_names)
@@ -1408,6 +1472,10 @@ class MainWidget(QTabWidget):
             self._refresh_combobox(self._projection_points_layer_combobox, points_layer_names)
     
     def _refresh_combobox(self, combobox: 'QComboBox', items: list[str]):
+        """ Reset a combo box with new items.
+
+        Keep previous selection if possible.
+        """
         current_text = combobox.currentText()
         current_index = combobox.currentIndex()
         combobox.clear()
@@ -1419,6 +1487,8 @@ class MainWidget(QTabWidget):
                 combobox.setCurrentIndex(current_index)
     
     def _update_points_colocalization_plot(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None, binwidth: float = None):
+        """ Update within layer and between layers nearest neighbor histograms for selected points layers.
+        """
         from scipy.spatial import distance
 
         if layer is None:
@@ -1480,6 +1550,8 @@ class MainWidget(QTabWidget):
 
 
 def slice_from_str(slice_str: str) -> tuple[slice]:
+    """ Convert string to slice.
+    """
     if slice_str.strip() == "":
         return (slice(None),)
     slice_strs = [dim_slice_str.strip() for dim_slice_str in slice_str.split(',')]
@@ -1491,6 +1563,8 @@ def slice_from_str(slice_str: str) -> tuple[slice]:
 
 
 def str_from_slice(slices: tuple[slice]) -> str:
+    """ Convert slice to string.
+    """
     slice_strs = []
     for dim_slice in slices:
         start = str(dim_slice.start) if dim_slice.start is not None else ""
@@ -1507,6 +1581,8 @@ def str_from_slice(slices: tuple[slice]) -> str:
 
 
 def combine_slices(parent_slice: tuple[slice], child_slice: tuple[slice], parent_shape: tuple[int]):
+    """ Return net slice equivalent to two successive slices.
+    """
     n_parent_slices = len(parent_slice)
     n_child_slices = len(child_slice)
     combined_slices = []
@@ -1533,6 +1609,8 @@ def combine_slices(parent_slice: tuple[slice], child_slice: tuple[slice], parent
 
 
 def normalize_image(image: np.ndarray, limits: tuple[float] = None) -> np.ndarray:
+    """ Return normalized image in [0.0, 1.0].
+    """
     image = image.astype(float)
     if limits is None:
         cmin, cmax = image.min(), image.max()
@@ -1546,6 +1624,10 @@ def normalize_image(image: np.ndarray, limits: tuple[float] = None) -> np.ndarra
 
 
 def register_images(fixed_image: np.ndarray, moving_image: np.ndarray, transform_type: str = "affine") -> np.ndarray:
+    """ Return transformation that aligns moving image to fixed image.
+
+    Uses pystackreg for image registration.
+    """
     from pystackreg import StackReg
 
     transform_types = {
@@ -1560,6 +1642,10 @@ def register_images(fixed_image: np.ndarray, moving_image: np.ndarray, transform
 
 
 def register_points(fixed_points: np.ndarray, moving_points: np.ndarray, transform_type: str = "affine") -> np.ndarray:
+    """ Return transformation that aligns moving points to fixed points.
+
+    Uses pycpd for point registration.
+    """
     if transform_type == "rigid body":
         from pycpd import RigidRegistration
         reg = RigidRegistration(X=fixed_points, Y=moving_points)
@@ -1581,6 +1667,8 @@ def register_points(fixed_points: np.ndarray, moving_points: np.ndarray, transfo
 
 
 def find_image_peaks(image: np.ndarray, min_peak_height: float = None, min_peak_separation: float = 3) -> np.ndarray:
+    """ Return position of local peaks in image.
+    """
     from skimage import morphology, measure
 
     pixel_radius = max(1, np.ceil(min_peak_separation / 2))
@@ -1603,6 +1691,10 @@ def find_image_peaks(image: np.ndarray, min_peak_height: float = None, min_peak_
 
 
 def find_colocalized_points(points: np.ndarray, neighbors: np.ndarray, nearest_neighbor_cutoff: float) -> np.ndarray:
+    """ Return colocalized points between two input points sets.
+
+    For each pair of colocalized points, their mean position is returned.
+    """
     pairwise_distances = np.linalg.norm(points[:, None, :] - neighbors[None, :, :], axis=-1)
     nearest_neighbor_distances = pairwise_distances.min(axis=1)
     points_indices = np.where(nearest_neighbor_distances <= nearest_neighbor_cutoff)[0]
@@ -1613,7 +1705,12 @@ def find_colocalized_points(points: np.ndarray, neighbors: np.ndarray, nearest_n
     colocalized_points = (points[points_indices] + neighbors[neighbors_indices]) / 2
     return colocalized_points
 
+
 def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = None) -> np.ndarray:
+    """ Return the point projection for the input image.
+
+    If a mask is given, the projection is the per-frame mean of the pixels in the mask scaled by the mask.
+    """
     # project single pixel
     if (point_mask2d is None) or np.all(point_mask2d.shape == 1):
         row, col = np.round(point2d).astype(int).flatten()
@@ -1639,6 +1736,10 @@ def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = N
 
 
 if __name__ == "__main__":
+    """ This is mostly for debugging.
+    
+    Typically, the plugin is run from the plugin menu in the napari viewer.
+    """
     import napari
 
     viewer = Viewer()

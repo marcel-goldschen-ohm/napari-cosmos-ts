@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:1b213223f200c8f40b3e8d7fc8b0f8b375371ebe5d007f19f46546adde41d7ae"
+content_hash = "sha256:9923ebd6608b1ec19f97c9466c8c8390c62c741ddd842612d53ab1aa6f42c891"
 
 [[package]]
 name = "alabaster"
@@ -441,6 +441,17 @@ groups = ["default"]
 files = [
     {file = "fsspec-2024.3.1-py3-none-any.whl", hash = "sha256:918d18d41bf73f0e2b261824baeb1b124bcf771767e3a26425cd7dec3332f512"},
     {file = "fsspec-2024.3.1.tar.gz", hash = "sha256:f39780e282d7d117ffb42bb96992f8a90795e4d0fb0f661a70ca39fe9c43ded9"},
+]
+
+[[package]]
+name = "future"
+version = "1.0.0"
+requires_python = ">=2.6, !=3.0.*, !=3.1.*, !=3.2.*"
+summary = "Clean single-source support for Python 3 and 2"
+groups = ["default"]
+files = [
+    {file = "future-1.0.0-py3-none-any.whl", hash = "sha256:929292d34f5872e70396626ef385ec22355a1fae8ad29e1a734c3e43f9fbc216"},
+    {file = "future-1.0.0.tar.gz", hash = "sha256:bd2968309307861edae1458a4f8a4f3598c03be43b97521076aebf5d94c07b05"},
 ]
 
 [[package]]
@@ -1341,6 +1352,20 @@ files = [
 ]
 
 [[package]]
+name = "pycpd"
+version = "2.0.0"
+summary = "Pure Numpy Implementation of the Coherent Point Drift Algorithm"
+groups = ["default"]
+dependencies = [
+    "future",
+    "numpy",
+]
+files = [
+    {file = "pycpd-2.0.0-py3-none-any.whl", hash = "sha256:c4d80a3db47919e27e3109e7f47cb41c442babced6f9126caa728bd18a28103a"},
+    {file = "pycpd-2.0.0.tar.gz", hash = "sha256:d0ae86c8f490d10ea9ad1d6067891197f1d5e948f23dcb7a59aadaee9ece5c9e"},
+]
+
+[[package]]
 name = "pydantic"
 version = "2.6.4"
 requires_python = ">=3.8"
@@ -1470,6 +1495,47 @@ dependencies = [
 files = [
     {file = "pyproject_hooks-1.0.0-py3-none-any.whl", hash = "sha256:283c11acd6b928d2f6a7c73fa0d01cb2bdc5f07c57a2eeb6e83d5e56b97976f8"},
     {file = "pyproject_hooks-1.0.0.tar.gz", hash = "sha256:f271b298b97f5955d53fb12b72c1fb1948c22c1a6b70b315c54cedaca0264ef5"},
+]
+
+[[package]]
+name = "pyqtgraph"
+version = "0.13.4"
+requires_python = ">=3.9"
+summary = "Scientific Graphics and GUI Library for Python"
+groups = ["default"]
+dependencies = [
+    "numpy>=1.22.0",
+]
+files = [
+    {file = "pyqtgraph-0.13.4-py3-none-any.whl", hash = "sha256:1dc9a786aa43cd787114366058dc3b4b8cb96a0e318f334720c7e6cc6c285940"},
+    {file = "pyqtgraph-0.13.4.tar.gz", hash = "sha256:67b0d371405c4fd5f35afecfeb37d4b73bc118f187c52a965ed68d62f59b67b3"},
+]
+
+[[package]]
+name = "pystackreg"
+version = "0.2.7"
+summary = "Image registration tool (python implementation of the ImageJ/FIJI Plugin TurboReg/StackReg)"
+groups = ["default"]
+dependencies = [
+    "numpy",
+    "tqdm",
+]
+files = [
+    {file = "pystackreg-0.2.7-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:54664e84d3cd613f8226f13809ebf4ed28301bed80ad938b830639dfa4d7d714"},
+    {file = "pystackreg-0.2.7-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a0d74a1aaf94a137b3f4c61a42a81e0e4553dca2be4ad5c26f5d77c0c899a9ee"},
+    {file = "pystackreg-0.2.7-cp310-cp310-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:76ec3f9be311ec980f06795088beaedeff2a73c2ad94c8ab62f2a06194d88fd2"},
+    {file = "pystackreg-0.2.7-cp310-cp310-musllinux_1_1_i686.whl", hash = "sha256:a86ede4a49025837a693cd25d6f24068b3f7dfd96876c96c92748a353c150f2d"},
+    {file = "pystackreg-0.2.7-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:4bd5255f7bd08d622c470cefabb01ad5bb5011b6efeaac1b4acb837612d04c33"},
+    {file = "pystackreg-0.2.7-cp310-cp310-win32.whl", hash = "sha256:ad777ed187db49066be94eecc54501e2f1ddba253a7e27808395673727fa230f"},
+    {file = "pystackreg-0.2.7-cp310-cp310-win_amd64.whl", hash = "sha256:9971c796d969ac8b4099c5b33bce9e9495bcbe1a2ab949bbc4307f41ade3af81"},
+    {file = "pystackreg-0.2.7-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:172325eb86a18c1b01d355abcae8bd283a017210de1eb00fe5f9dc4bb34ed89b"},
+    {file = "pystackreg-0.2.7-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7f48ab87aed5899fdc3d19b1aec2c724232306f9f554c50a91481a116ae3e7e6"},
+    {file = "pystackreg-0.2.7-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a8d92b163a200d0887dca388f1c7fdb8d2c67fcd3759a8818f759f4ca3e4eabb"},
+    {file = "pystackreg-0.2.7-cp311-cp311-musllinux_1_1_i686.whl", hash = "sha256:a769322ef45679f0f3a5c586dfac2cb0032c642fb5cb67d099a5abc8d0ac835a"},
+    {file = "pystackreg-0.2.7-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:2a81c586f591be678f9ccd6f65e3db7e8c803076708566904978d5add4f31ed9"},
+    {file = "pystackreg-0.2.7-cp311-cp311-win32.whl", hash = "sha256:14d732973fded0918e6e7ffb8ab39cf785b212a2b3811a1da2b6d4a08ac05824"},
+    {file = "pystackreg-0.2.7-cp311-cp311-win_amd64.whl", hash = "sha256:f0929d0f73579134219231c3c5430c27405524f45e313d8440ddb605e9fb64f2"},
+    {file = "pystackreg-0.2.7.tar.gz", hash = "sha256:c3df8b42bb9f4d44ec7ba44b3c061d7ea7481ab62318c24a25ffdb22afbaf3ab"},
 ]
 
 [[package]]
