@@ -1,4 +1,4 @@
-"""
+""" Main widget for the napari-cosmos-ts plugin.
 """
 
 import os
@@ -12,7 +12,7 @@ import pyqtgraph as pg
 
 
 class MainWidget(QTabWidget):
-    """ 
+    """ Main widget for the napari-cosmos-ts plugin.
     """
     
     def __init__(self, viewer: Viewer, parent=None):
@@ -225,6 +225,8 @@ class MainWidget(QTabWidget):
         
         if self._selected_point_layer is not None:
             self.set_projection_point(self._selected_point_layer.data)
+        
+        self._update_layer_selection_comboboxes()
     
     def split_image_layer(self, layer: Image, regions: str = None) -> list[Image]:
         """ Split image horizontally, vertically, or into quadrants.
@@ -619,7 +621,7 @@ class MainWidget(QTabWidget):
                     # update plot
                     metadata['point_projection_data'].setData(point_projection)
     
-    def select_projection_point(self, layer: Points = None, point_index: int = None):
+    def select_projection_point(self, layer: Points = None, point_index: int = None, ignore_tag_filter: bool = False):
         """ Select an existing point to use as the position for the currently visible point projections.
 
         The selected point will be used for projection in all image stack layers.
@@ -662,6 +664,38 @@ class MainWidget(QTabWidget):
                 self._projection_point_index_spinbox.clear()
         
         if layer is not None and point_index is not None:
+            # tag filter
+            if (not ignore_tag_filter) and self._tag_filter_checkbox.isChecked() and ('tags' in layer.features):
+                tag_filter = [tag.strip() for tag in self._tag_filter_edit.text().split(",")]
+                tags = [tag.strip() for tag in layer.features['tags'][point_index].split(",")]
+                if not any(tag in tags for tag in tag_filter):
+                    found_point = False
+                    n_points = len(layer.data)
+                    prev_point_index = getattr(self, '_selected_point_index', None)
+                    if prev_point_index is None or prev_point_index <= point_index:
+                        search_direction = ["forward", "backward"]
+                    else:
+                        search_direction = ["backward", "forward"]
+                    for direction in search_direction:
+                        if found_point:
+                            break
+                        if direction == "forward":
+                            for i in range(point_index + 1, n_points):
+                                tags = [tag.strip() for tag in layer.features['tags'][i].split(",")]
+                                if any(tag in tags for tag in tag_filter):
+                                    point_index = i
+                                    found_point = True
+                                    break
+                        elif direction == "backward":
+                            for i in reversed(range(point_index)):
+                                tags = [tag.strip() for tag in layer.features['tags'][i].split(",")]
+                                if any(tag in tags for tag in tag_filter):
+                                    point_index = i
+                                    found_point = True
+                                    break
+                    if found_point:
+                        self._projection_point_index_spinbox.setValue(point_index)
+
             # project point
             layerpt2d = layer.data[point_index,-2:]
             worldpt2d = self._transform_points2d_from_layer_to_world(layerpt2d, layer)
@@ -676,6 +710,9 @@ class MainWidget(QTabWidget):
         
         self._projection_points_layer_combobox.blockSignals(False)
         self._projection_point_index_spinbox.blockSignals(False)
+
+        # keep track of currently selected point
+        self._selected_point_index = point_index
         
         # remove guard
         self._select_projection_point_in_progress = False
@@ -967,7 +1004,7 @@ class MainWidget(QTabWidget):
                 layerpt_indexes = np.argsort(square_dists)
                 for index in layerpt_indexes:
                     if square_dists[index] <= radii[index]**2:
-                        self.select_projection_point(layer, index)
+                        self.select_projection_point(layer, index, ignore_tag_filter=True)
                         return
             
             # Did NOT click on an existing point.
@@ -1263,7 +1300,6 @@ class MainWidget(QTabWidget):
         self._coloc_neighbors_layer_combobox.currentTextChanged.connect(lambda text: self._update_points_colocalization_plot())
 
         self._coloc_nearest_neighbor_cutoff_spinbox = QDoubleSpinBox()
-        self._coloc_nearest_neighbor_cutoff_spinbox.setSingleStep(0.5)
         self._coloc_nearest_neighbor_cutoff_spinbox.setValue(self._point_size_spinbox.value() / 2)
 
         self._coloc_hist_binwidth_spinbox = QDoubleSpinBox()
@@ -1295,13 +1331,15 @@ class MainWidget(QTabWidget):
 
         self._projection_point_world_label = QLabel()
         self._n_projection_points_label = QLabel()
-
-        self._tag_filter_checkbox = QCheckBox("Tag filter")
         
         self._tag_edit = QLineEdit()
         self._tag_edit.editingFinished.connect(self.set_point_tags)
 
+        self._tag_filter_checkbox = QCheckBox("Tag filter")
+        self._tag_filter_checkbox.stateChanged.connect(lambda state: self._update_tag_filter())
+
         self._tag_filter_edit = QLineEdit()
+        self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
         tab = QTabWidget()
         for tab_title in ["Size", "Find", "Colocalize", "Projection"]:
@@ -1548,6 +1586,10 @@ class MainWidget(QTabWidget):
             self._within_layers_nearest_neighbors_histogram.setData([0, 0], [0])
             self._between_layers_nearest_neighbors_histogram.setData([0, 0], [0])
 
+    def _update_tag_filter(self):
+        if self._tag_filter_checkbox.isChecked():
+            self.select_projection_point()
+
 
 def slice_from_str(slice_str: str) -> tuple[slice]:
     """ Convert string to slice.
@@ -1746,31 +1788,41 @@ if __name__ == "__main__":
     plugin = MainWidget(viewer)
     viewer.window.add_dock_widget(plugin, name='napari-cosmos-ts', area='right')
 
-    # viewer.add_image(
-    #     np.random.random([1000, 512, 512]),
-    #     contrast_limits=[0.8, 1],
-    # )
+    viewer.add_image(
+        np.random.random([1000, 512, 512]),
+        contrast_limits=[0.8, 1],
+    )
 
-    # n_points = 100
-    # viewer.add_points(
-    #     np.random.random([n_points, 2]) * 512,
-    #     symbol = "disc",
-    #     size = [8] * n_points,
-    #     face_color = [[1, 1, 0, 0.1]] * n_points,
-    #     edge_color = [[1, 1, 0, 1]] * n_points,
-    #     opacity = 1,
-    #     blending = "translucent_no_depth",
-    # )
+    viewer.add_image(
+        np.random.random([1000, 512, 512]),
+        contrast_limits=[0.8, 1],
+    )
 
-    # n_points = 50
-    # viewer.add_points(
-    #     np.random.random([n_points, 2]) * 512,
-    #     symbol = "disc",
-    #     size = [8] * n_points,
-    #     face_color = [[1, 1, 0, 0.1]] * n_points,
-    #     edge_color = [[1, 1, 0, 1]] * n_points,
-    #     opacity = 1,
-    #     blending = "translucent_no_depth",
-    # )
+    viewer.add_image(
+        np.random.random([512, 512]),
+        contrast_limits=[0.8, 1],
+    )
+
+    n_points = 100
+    viewer.add_points(
+        np.random.random([n_points, 2]) * 512,
+        symbol = "disc",
+        size = [8] * n_points,
+        face_color = [[1, 1, 0, 0.1]] * n_points,
+        edge_color = [[1, 1, 0, 1]] * n_points,
+        opacity = 1,
+        blending = "translucent_no_depth",
+    )
+
+    n_points = 50
+    viewer.add_points(
+        np.random.random([n_points, 2]) * 512,
+        symbol = "disc",
+        size = [8] * n_points,
+        face_color = [[1, 1, 0, 0.1]] * n_points,
+        edge_color = [[1, 1, 0, 1]] * n_points,
+        opacity = 1,
+        blending = "translucent_no_depth",
+    )
 
     napari.run()
