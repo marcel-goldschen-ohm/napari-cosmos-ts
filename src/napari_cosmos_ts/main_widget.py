@@ -510,7 +510,7 @@ class MainWidget(QTabWidget):
             name = layer.name + " (peaks)",
             affine = layer.affine.affine_matrix[-3:,-3:],
             symbol = "disc",
-            size = [self._point_size_spinbox.value()] * n_points,
+            size = [self._default_point_size_spinbox.value()] * n_points,
             face_color = [[1, 1, 0, 0.1]] * n_points,
             edge_color = [[1, 1, 0, 1]] * n_points,
             opacity = 1,
@@ -553,7 +553,7 @@ class MainWidget(QTabWidget):
             colocalized,
             name = "colocalized",
             symbol = "disc",
-            size = [self._point_size_spinbox.value()] * n_points,
+            size = [self._default_point_size_spinbox.value()] * n_points,
             face_color = [[1, 0, 1, 0.1]] * n_points,
             edge_color = [[1, 0, 1, 1]] * n_points,
             opacity = 1,
@@ -561,7 +561,7 @@ class MainWidget(QTabWidget):
         )
         return new_layer
     
-    def set_projection_point(self, worldpt2d: np.ndarray | None):
+    def set_projection_point(self, worldpt2d: np.ndarray | None, point_size: int | float = None):
         """ Set the world position for the currently visible point projections.
 
         This will update the point projection plots for all image stack layers.
@@ -584,6 +584,9 @@ class MainWidget(QTabWidget):
             return
         
         worldpt2d = np.array(worldpt2d).reshape([1, 2])
+
+        if point_size is None:
+            point_size = self._default_point_size_spinbox.value()
         
         # update selected projection point overlay
         if self._selected_point_layer is None:
@@ -591,7 +594,7 @@ class MainWidget(QTabWidget):
                 worldpt2d,
                 name = "selected point",
                 symbol = "disc",
-                size = [self._point_size_spinbox.value()],
+                size = [point_size],
                 face_color = [[0, 1, 1, 0.1]],
                 edge_color = [[0, 1, 1, 1]],
                 opacity = 1,
@@ -602,6 +605,7 @@ class MainWidget(QTabWidget):
             self._update_layer_selection_comboboxes(self._selected_point_layer)
         else:
             self._selected_point_layer.data = worldpt2d
+            self._selected_point_layer.size = [point_size]
         
         # update point projections tab
         row, col = np.round(worldpt2d).astype(int).flatten()
@@ -609,8 +613,9 @@ class MainWidget(QTabWidget):
         self._tag_edit.setText("")
         
         # project selected point for all imagestack layers
-        point_size = int(np.round(self._selected_point_layer.size[0]))
-        point_mask = np.ones([point_size, point_size])
+        # use circular mask for point projection
+        pixel_size = int(np.round(self._selected_point_layer.size[0]))
+        point_mask = make_point_mask(pixel_size, type='circle')
         for layer, metadata in zip(self.viewer.layers, self._layer_metadata):
             if isinstance(layer, Image) and layer.data.ndim == 3:
                 if 'point_projection_data' in metadata:
@@ -699,7 +704,8 @@ class MainWidget(QTabWidget):
             # project point
             layerpt2d = layer.data[point_index,-2:]
             worldpt2d = self._transform_points2d_from_layer_to_world(layerpt2d, layer)
-            self.set_projection_point(worldpt2d)
+            point_size = layer.size[point_index]
+            self.set_projection_point(worldpt2d, point_size)
 
             # show point tags
             try:
@@ -965,12 +971,15 @@ class MainWidget(QTabWidget):
     def _on_mouse_clicked_or_dragged(self, viewer: Viewer, event: Event):
         """ Callback for mouse press/drag/release events.
         """
+        from qtpy.QtCore import Qt
+
         if viewer.layers.selection.active.mode != "pan_zoom":
             return
         
         # mouse press event
+        # only process left-click events
         # ignore initial mouse press event (we'll use the mouse release event instead)
-        if event.type == 'mouse_press':
+        if (event.type == 'mouse_press') and (event._button == Qt.MouseButton.LeftButton):
             yield
         else:
             return
@@ -1135,7 +1144,7 @@ class MainWidget(QTabWidget):
         """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QLabel
 
-        msg = QLabel("!!! Session stores the relative path to each image stack file, NOT the data itself. It is up to you to maintain this file structure. !!!")
+        msg = QLabel("!!! Session stores the relative path to each image stack file, NOT the data itself. It is up to you to maintain this file structure.\nSession .mat files can be accessed in MATLAB.")
         msg.setWordWrap(True)
 
         self._open_session_button = QPushButton("Open .mat session file")
@@ -1203,7 +1212,7 @@ class MainWidget(QTabWidget):
         self._tophat_filter_disk_radius_spinbox.setValue(3)
 
         tab = QTabWidget()
-        for tab_title in ["Split", "Slice", "Project", "Filter"]:
+        for tab_title in ["Split/Slice", "Project", "Filter"]:
             msg = QLabel("Operations are applied to all selected image layers.\nResults are returned in new layers.")
             msg.setWordWrap(True)
 
@@ -1211,22 +1220,22 @@ class MainWidget(QTabWidget):
             inner.setContentsMargins(0, 0, 0, 0)
             inner.setSpacing(5)
             inner.addWidget(msg)
-            if tab_title == "Split":
+            if tab_title == "Split/Slice":
                 group = QGroupBox()
                 form = QFormLayout(group)
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
                 form.addRow(self._split_image_button)
-                form.addRow("regions", self._split_image_regions_combobox)
+                form.addRow("Regions", self._split_image_regions_combobox)
                 inner.addWidget(group)
-            elif tab_title == "Slice":
+
                 group = QGroupBox()
                 form = QFormLayout(group)
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
                 form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
                 form.addRow(self._slice_image_button)
-                form.addRow("slice", self._slice_image_edit)
+                form.addRow("Slice", self._slice_image_edit)
                 inner.addWidget(group)
             elif tab_title == "Project":
                 group = QGroupBox()
@@ -1234,7 +1243,7 @@ class MainWidget(QTabWidget):
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
                 form.addRow(self._project_image_button)
-                form.addRow("projection", self._project_image_operation_combobox)
+                form.addRow("Projection", self._project_image_operation_combobox)
                 inner.addWidget(group)
             elif tab_title == "Filter":
                 group = QGroupBox()
@@ -1242,7 +1251,7 @@ class MainWidget(QTabWidget):
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
                 form.addRow(self._gaussian_filter_button)
-                form.addRow("sigma", self._gaussian_filter_sigma_spinbox)
+                form.addRow("Sigma", self._gaussian_filter_sigma_spinbox)
                 inner.addWidget(group)
                 
                 group = QGroupBox()
@@ -1250,7 +1259,7 @@ class MainWidget(QTabWidget):
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
                 form.addRow(self._tophat_filter_button)
-                form.addRow("disk radius", self._tophat_filter_disk_radius_spinbox)
+                form.addRow("Disk radius", self._tophat_filter_disk_radius_spinbox)
                 inner.addWidget(group)
             inner.addStretch()
 
@@ -1274,8 +1283,14 @@ class MainWidget(QTabWidget):
         from qtpy.QtCore import Qt
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit
 
-        self._point_size_spinbox = QDoubleSpinBox()
-        self._point_size_spinbox.setValue(8)
+        self._default_point_size_spinbox = QDoubleSpinBox()
+        self._default_point_size_spinbox.setValue(8)
+
+        self._default_point_mask_grid = QGridLayout()
+        self._default_point_mask_grid.setContentsMargins(5, 5, 5, 5)
+        self._default_point_mask_grid.setSpacing(2)
+        self._update_default_point_mask_grid()
+        self._default_point_size_spinbox.valueChanged.connect(self._update_default_point_mask_grid)
 
         self._find_peaks_button = QPushButton("Find peaks in all selected image layers")
         self._find_peaks_button.pressed.connect(lambda: self._apply_to_selected_layers(self.find_image_peaks))
@@ -1288,7 +1303,7 @@ class MainWidget(QTabWidget):
         self._min_peak_separation_spinbox = QDoubleSpinBox()
         self._min_peak_separation_spinbox.setMinimum(1)
         self._min_peak_separation_spinbox.setMaximum(65000)
-        self._min_peak_separation_spinbox.setValue(self._point_size_spinbox.value())
+        self._min_peak_separation_spinbox.setValue(self._default_point_size_spinbox.value())
 
         self._find_colocalized_points_button = QPushButton("Find colocalized points")
         self._find_colocalized_points_button.pressed.connect(self.find_colocalized_points)
@@ -1300,11 +1315,11 @@ class MainWidget(QTabWidget):
         self._coloc_neighbors_layer_combobox.currentTextChanged.connect(lambda text: self._update_points_colocalization_plot())
 
         self._coloc_nearest_neighbor_cutoff_spinbox = QDoubleSpinBox()
-        self._coloc_nearest_neighbor_cutoff_spinbox.setValue(self._point_size_spinbox.value() / 2)
+        self._coloc_nearest_neighbor_cutoff_spinbox.setValue(self._default_point_size_spinbox.value() / 2)
 
         self._coloc_hist_binwidth_spinbox = QDoubleSpinBox()
         self._coloc_hist_binwidth_spinbox.setMinimum(1)
-        self._coloc_hist_binwidth_spinbox.setValue(self._point_size_spinbox.value() / 2)
+        self._coloc_hist_binwidth_spinbox.setValue(self._default_point_size_spinbox.value() / 2)
         self._coloc_hist_binwidth_spinbox.valueChanged.connect(lambda value: self._update_points_colocalization_plot())
 
         self._coloc_plot = self._new_plot()
@@ -1342,17 +1357,25 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
         tab = QTabWidget()
-        for tab_title in ["Size", "Find", "Colocalize", "Projection"]:
+        for tab_title in ["Point", "Find", "Colocalize", "Projection"]:
             inner = QVBoxLayout()
             inner.setContentsMargins(0, 0, 0, 0)
             inner.setSpacing(5)
-            if tab_title == "Size":
+            if tab_title == "Point":
+                msg = QLabel("Point projections use a circular mask centered on the point with pixel diameter equal to the selected point's size. For projecting an arbitrary position, the default size below will be used.")
+                msg.setWordWrap(True)
+
                 group = QGroupBox()
                 form = QFormLayout(group)
                 form.setContentsMargins(5, 5, 5, 5)
                 form.setSpacing(5)
-                form.addRow("Default point size", self._point_size_spinbox)
+                form.addRow(msg)
+                form.addRow("Default point size", self._default_point_size_spinbox)
                 inner.addWidget(group)
+
+                inner.addSpacing(10)
+                inner.addWidget(QLabel("Default point projection mask"))
+                inner.addLayout(self._default_point_mask_grid)
             elif tab_title == "Find":
                 group = QGroupBox()
                 form = QFormLayout(group)
@@ -1363,6 +1386,10 @@ class MainWidget(QTabWidget):
                 form.addRow("Min peak separation", self._min_peak_separation_spinbox)
                 inner.addWidget(group)
             elif tab_title == "Colocalize":
+                grid = QGridLayout()
+                grid.setContentsMargins(0, 0, 0, 0)
+                grid.setSpacing(0)
+
                 group = QGroupBox()
                 form = QFormLayout(group)
                 form.setContentsMargins(5, 5, 5, 5)
@@ -1371,9 +1398,16 @@ class MainWidget(QTabWidget):
                 form.addRow("Points layer", self._coloc_layer_combobox)
                 form.addRow("Neighbors points layer", self._coloc_neighbors_layer_combobox)
                 form.addRow("Nearest neighbor cutoff", self._coloc_nearest_neighbor_cutoff_spinbox)
+                grid.addWidget(group, 0, 0)
+
+                form = QFormLayout()
+                form.setContentsMargins(5, 5, 5, 5)
+                form.setSpacing(5)
                 form.addRow("Histogram bin width", self._coloc_hist_binwidth_spinbox)
-                form.addRow(self._coloc_plot)
-                inner.addWidget(group)
+                grid.addLayout(form, 1, 0)
+                grid.addWidget(self._coloc_plot, 2, 0, 1, 2)
+                
+                inner.addLayout(grid)
             elif tab_title == "Projection":
                 grid = QGridLayout()
                 grid.setContentsMargins(0, 0, 0, 0)
@@ -1449,9 +1483,9 @@ class MainWidget(QTabWidget):
         form.setContentsMargins(5, 5, 5, 5)
         form.setSpacing(5)
         form.addRow(self._register_layers_button)
-        form.addRow("fixed Layer", self._fixed_layer_combobox)
-        form.addRow("moving Layer", self._moving_layer_combobox)
-        form.addRow("transform", self._layer_transform_type_combobox)
+        form.addRow("Fixed Layer", self._fixed_layer_combobox)
+        form.addRow("Moving Layer", self._moving_layer_combobox)
+        form.addRow("Transform", self._layer_transform_type_combobox)
 
         inner = QVBoxLayout()
         inner.setContentsMargins(0, 0, 0, 0)
@@ -1524,6 +1558,23 @@ class MainWidget(QTabWidget):
             elif 0 <= current_index < len(items):
                 combobox.setCurrentIndex(current_index)
     
+    def _update_default_point_mask_grid(self):
+        from qtpy.QtCore import Qt
+        from qtpy.QtWidgets import QLabel
+
+        clear_layout(self._default_point_mask_grid)
+        point_size = self._default_point_size_spinbox.value()
+        point_mask = make_point_mask(point_size, type='circle')
+        for i, row in enumerate(point_mask):
+            for j, value in enumerate(row):
+                label = QLabel(str(float(value)))
+                bg = int(255 * value)
+                fg = 0 if bg >= 128 else 255
+                label.setStyleSheet(f"QLabel {{ background-color : rgb({bg}, {bg}, {bg}); color : rgb({fg}, {fg}, {fg}); }}")
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                label.setFixedSize(30, 30)
+                self._default_point_mask_grid.addWidget(label, i, j)
+    
     def _update_points_colocalization_plot(self, layer: Points = None, neighbors_layer: Points = None, nearest_neighbor_cutoff: float = None, binwidth: float = None):
         """ Update within layer and between layers nearest neighbor histograms for selected points layers.
         """
@@ -1589,6 +1640,19 @@ class MainWidget(QTabWidget):
     def _update_tag_filter(self):
         if self._tag_filter_checkbox.isChecked():
             self.select_projection_point()
+
+
+def clear_layout(layout: 'qtpy.QtWidgets.QLayout'):
+    from qtpy.QtWidgets import QLayout
+
+    for i in reversed(range(layout.count())):
+        item = layout.itemAt(i)
+        if isinstance(item, QLayout):
+            clear_layout(item)
+        elif item.widget():
+            item.widget().setParent(None)
+        else:
+            layout.removeItem(item)
 
 
 def slice_from_str(slice_str: str) -> tuple[slice]:
@@ -1775,6 +1839,18 @@ def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = N
     mask = point_mask2d[i.reshape([-1,1]),j.reshape([1,-1])]
     mask = mask.reshape((1,) * (image.ndim - 2) + mask.shape)
     return np.squeeze(np.mean(image[...,rows,cols] * mask, axis=(-2, -1)))
+
+
+def make_point_mask(size: int | float, type: str = 'circle'):
+    if type == 'circle':
+        radius = size / 2
+        max_pixel_offset = (size - 1) / 2
+        pixel_offsets = np.arange(-max_pixel_offset, max_pixel_offset + 1, dtype=float)
+        mask = (pixel_offsets.reshape([-1,1])**2 + pixel_offsets.reshape([1,-1])**2) <= radius**2
+        return mask
+    
+    if type == 'square':
+        return np.ones((size, size), dtype=bool)
 
 
 if __name__ == "__main__":
