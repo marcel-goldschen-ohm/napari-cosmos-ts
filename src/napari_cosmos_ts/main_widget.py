@@ -57,6 +57,7 @@ class MainWidget(QTabWidget):
         session['ID'] = self._id_edit.text() + " "
         session['users'] = self._users_edit.text() + " "
         session['notes'] = self._notes_edit.toPlainText() + " "
+        session['default_point_size'] = self._default_point_size_spinbox.value()
         
         # layer dicts
         session['layers'] = []
@@ -142,6 +143,8 @@ class MainWidget(QTabWidget):
                 self._users_edit.setText(str(value).strip())
             elif key == "notes":
                 self._notes_edit.setPlainText(str(value).strip())
+            elif key == "default_point_size":
+                self._default_point_size_spinbox.setValue(session['default_point_size'])
             elif key == "layers":
                 for layer_data in value:
                     layer = None
