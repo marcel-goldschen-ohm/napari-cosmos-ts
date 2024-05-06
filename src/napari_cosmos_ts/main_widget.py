@@ -625,9 +625,23 @@ class MainWidget(QTabWidget):
                     # selected point in layer
                     layerpt2d = self._transform_points2d_from_world_to_layer(worldpt2d, layer)
                     # project point
-                    point_projection = project_image_point(layer.data, layerpt2d, point_mask)
+                    xdata = None  # assumed integer frames
+                    ydata = project_image_point(layer.data, layerpt2d, point_mask)
+                    # sum frames?
+                    if 'projection-sum-frames' in metadata:
+                        nframes = metadata['projection-sum-frames']
+                        if nframes > 1:
+                            xdata = np.arange(0, len(ydata), nframes)
+                            tmp_ydata = np.zeros(xdata.shape)
+                            for i in range(nframes):
+                                tmp = ydata[i::nframes]
+                                tmp_ydata[:len(tmp)] += tmp
+                            ydata = tmp_ydata
                     # update plot
-                    metadata['point_projection_data'].setData(point_projection)
+                    if xdata is None:
+                        metadata['point_projection_data'].setData(ydata)
+                    else:
+                        metadata['point_projection_data'].setData(xdata, ydata)
     
     def select_projection_point(self, layer: Points = None, point_index: int = None, ignore_tag_filter: bool = False):
         """ Select an existing point to use as the position for the currently visible point projections.
@@ -725,6 +739,24 @@ class MainWidget(QTabWidget):
         
         # remove guard
         self._select_projection_point_in_progress = False
+    
+    def update_point_projections(self):
+        is_index_selected = self._projection_point_index_spinbox.text().strip() != ''
+        if is_index_selected:
+            index = self._projection_point_index_spinbox.value()
+            layer_name = self._projection_points_layer_combobox.currentText()
+            try:
+                layer = self.viewer.layers[layer_name]
+                self.select_projection_point(layer, index, ignore_tag_filter=True)
+                return
+            except KeyError:
+                pass
+        
+        # no index selected, check for selected point layer
+        if self._selected_point_layer is not None:
+            worldpt2d = self._selected_point_layer.data
+            self.set_projection_point(worldpt2d)
+            return
     
     def set_point_tags(self, layer: Points = None, point_index: int = None, tags: str = None):
         """ Set tags for a point.
@@ -1359,6 +1391,9 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit = QLineEdit()
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
+        self._projection_settings_button = QPushButton("Settings")
+        self._projection_settings_button.pressed.connect(self._edit_projection_settings)
+
         tab = QTabWidget()
         for tab_title in ["Point", "Find", "Colocalize", "Projection"]:
             inner = QVBoxLayout()
@@ -1431,6 +1466,7 @@ class MainWidget(QTabWidget):
                 grid.addWidget(self._projection_point_world_label, 1, 2)
                 grid.addWidget(tag_label, 1, 3)
                 grid.addWidget(self._tag_edit, 1, 4)
+                grid.addWidget(self._projection_settings_button, 1, 5)
                 inner.addLayout(grid)
                 inner.addLayout(self._point_projection_plots_layout)
             
@@ -1643,6 +1679,45 @@ class MainWidget(QTabWidget):
     def _update_tag_filter(self):
         if self._tag_filter_checkbox.isChecked():
             self.select_projection_point()
+    
+    def _edit_projection_settings(self):
+        from qtpy.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QFormLayout, QDialogButtonBox, QSpinBox
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Point Projection Settings")
+        vbox = QVBoxLayout(dlg)
+
+        group = QGroupBox("Sum Frames")
+        form = QFormLayout(group)
+        sum_frames_spinboxes = {}
+        for layer, metadata in zip(reversed(self.viewer.layers), reversed(self._layer_metadata)):
+            if isinstance(layer, Image) and layer.data.ndim == 3:
+                spinbox = QSpinBox()
+                spinbox.setMinimum(1)
+                spinbox.setMaximum(layer.data.shape[-3])
+                if 'projection-sum-frames' in metadata:
+                    spinbox.setValue(metadata['projection-sum-frames'])
+                form.addRow(layer.name, spinbox)
+                sum_frames_spinboxes[layer.name] = spinbox
+        vbox.addWidget(group)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        vbox.addWidget(buttons)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+        
+        for layer, metadata in zip(reversed(self.viewer.layers), reversed(self._layer_metadata)):
+            if isinstance(layer, Image) and layer.data.ndim == 3:
+                spinbox = sum_frames_spinboxes[layer.name]
+                if spinbox.value() != 1:
+                    metadata['projection-sum-frames'] = spinbox.value()
+                elif 'projection-sum-frames' in metadata:
+                    del metadata['projection-sum-frames']
+        
+        self.update_point_projections()
 
 
 def clear_layout(layout: 'qtpy.QtWidgets.QLayout'):
