@@ -2,6 +2,7 @@
 name = "napari-cosmos-ts"
 description = "napari plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS) analysis"
 authors = [
+    {name = "Marcel Goldschen-Ohm"},
     {name = "Marcel Goldschen-Ohm", email = "goldschen-ohm@utexas.edu"},
 ]
 dependencies = [
