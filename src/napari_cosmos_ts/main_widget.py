@@ -970,13 +970,27 @@ class MainWidget(QTabWidget):
         layer_index = event.index
         layer = self.viewer.layers[layer_index]
         metadata = self._layer_metadata[layer_index]
+        # old_name = event.old
+        print(event.__dict__.keys())
         
         # image stack
-        if isinstance(layer, Image) and layer.data.ndim > 2:
+        if isinstance(layer, Image) and layer.data.ndim == 3:
             # rename point projection plot
             if 'point_projection_plot' in metadata:
                 plot = metadata['point_projection_plot']
                 plot.setLabels(left=layer.name)
+        
+        # points
+        if isinstance(layer, Points):
+            # rename stored point projections
+            points_layer_names = [points_layer.name for points_layer in self._points_layers()]
+            for imagestack_layer in self._imagestack_layers():
+                if 'point_projections' in imagestack_layer.metadata:
+                    keys = list(imagestack_layer.metadata['point_projections'].keys())
+                    for key in keys:
+                        if key not in points_layer_names:
+                            imagestack_layer.metadata['point_projections'][layer.name] = imagestack_layer.metadata['point_projections'].pop(key)
+                            break
 
         # update layer selection lists
         self._update_layer_selection_comboboxes(layer)
