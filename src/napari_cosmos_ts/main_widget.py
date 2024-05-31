@@ -683,6 +683,7 @@ class MainWidget(QTabWidget):
             n_points = layer.data.shape[0]
             self._n_projection_points_label.setText(f"{n_points} pts")
             self._projection_point_index_spinbox.setMaximum(n_points - 1)
+            self._projection_point_index_spinbox.setMinimum(0)
 
             if point_index is None:
                 if self._projection_point_index_spinbox.text() != "":
@@ -1426,6 +1427,7 @@ class MainWidget(QTabWidget):
         self._projection_points_layer_combobox.currentTextChanged.connect(lambda text: self.select_projection_point())
 
         self._projection_point_index_spinbox = QSpinBox()
+        self._projection_point_index_spinbox.setMinimum(0)
         self._projection_point_index_spinbox.valueChanged.connect(lambda value: self.select_projection_point())
 
         self._projection_point_world_label = QLabel()
