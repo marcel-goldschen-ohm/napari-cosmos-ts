@@ -622,21 +622,33 @@ class MainWidget(QTabWidget):
         for layer, metadata in zip(self.viewer.layers, self._layer_metadata):
             if isinstance(layer, Image) and layer.data.ndim == 3:
                 if 'point_projection_data' in metadata:
-                    # selected point in layer
+                    # point in image layer
                     layerpt2d = self._transform_points2d_from_world_to_layer(worldpt2d, layer)
-                    # project point
+                    
+                    # point projection
                     xdata = None  # assumed integer frames
                     ydata = project_image_point(layer.data, layerpt2d, point_mask)
+                    
+                    # if not image data, look for stored point projection in layer metadata
+                    if np.all(np.isnan(ydata)):
+                        points_layer_name = self._projection_points_layer_combobox.currentText()
+                        if points_layer_name in self.viewer.layers:
+                            points_layer = self.viewer.layers[points_layer_name]
+                            if self._projection_point_index_spinbox.text() != "":
+                                point_index = self._projection_point_index_spinbox.value()
+                                ydata = self.get_point_projection(layer, points_layer, point_index)
+                    
                     # sum frames?
                     if 'projection-sum-frames' in metadata:
-                        nframes = metadata['projection-sum-frames']
-                        if nframes > 1:
-                            xdata = np.arange(0, len(ydata), nframes)
+                        sumframes = metadata['projection-sum-frames']
+                        if sumframes > 1:
+                            maxframes = len(ydata) - len(ydata) % sumframes
+                            xdata = np.arange(0, maxframes, sumframes)
                             tmp_ydata = np.zeros(xdata.shape)
-                            for i in range(nframes):
-                                tmp = ydata[i::nframes]
-                                tmp_ydata[:len(tmp)] += tmp
+                            for i in range(sumframes):
+                                tmp_ydata += ydata[i:maxframes:sumframes]
                             ydata = tmp_ydata
+                    
                     # update plot
                     if xdata is None:
                         metadata['point_projection_data'].setData(ydata)
@@ -757,6 +769,27 @@ class MainWidget(QTabWidget):
             worldpt2d = self._selected_point_layer.data
             self.set_projection_point(worldpt2d)
             return
+    
+    def get_point_projection(self, image_layer: Image, points_layer: Points, point_index: int):
+        # point position in image layer
+        pointspt2d = np.array(points_layer.data[point_index]).reshape([1, 2])
+        worldpt2d = self._transform_points2d_from_layer_to_world(pointspt2d, points_layer)
+        imagept2d = self._transform_points2d_from_world_to_layer(worldpt2d, image_layer)
+
+        # point mask
+        pixel_size = int(np.round(points_layer.size[point_index]))
+        point_mask = make_point_mask(pixel_size, type='circle')
+        
+        # project point
+        point_projection = project_image_point(image_layer.data, imagept2d, point_mask)
+        
+        # if not image data, look for stored point projection in layer metadata
+        if np.all(np.isnan(point_projection)):
+            if 'point_projections' in image_layer.metadata:
+                if points_layer.name in image_layer.metadata['point_projections']:
+                    point_projection = image_layer.metadata['point_projections'][points_layer.name][point_index]
+        
+        return point_projection
     
     def set_point_tags(self, layer: Points = None, point_index: int = None, tags: str = None):
         """ Set tags for a point.
@@ -1373,6 +1406,8 @@ class MainWidget(QTabWidget):
         self._point_projection_plots_layout.setContentsMargins(0, 0, 0, 0)
         self._point_projection_plots_layout.setSpacing(0)
 
+        self._only_visible_image_stack_layers_message = QLabel('Point projections are only shown for visible image stack layers.')
+
         self._projection_points_layer_combobox = QComboBox()
         self._projection_points_layer_combobox.currentTextChanged.connect(lambda text: self.select_projection_point())
 
@@ -1392,7 +1427,12 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
         self._projection_settings_button = QPushButton("Settings")
+        self._projection_settings_button.setToolTip("Point projection options.")
         self._projection_settings_button.pressed.connect(self._edit_projection_settings)
+
+        self._store_projections_button = QPushButton("Store")
+        self._store_projections_button.setToolTip("Store all point projections in image layer metadata.")
+        self._store_projections_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
 
         tab = QTabWidget()
         for tab_title in ["Point", "Find", "Colocalize", "Projection"]:
@@ -1461,14 +1501,16 @@ class MainWidget(QTabWidget):
                 grid.addWidget(self._n_projection_points_label, 0, 2)
                 grid.addWidget(self._tag_filter_checkbox, 0, 3)
                 grid.addWidget(self._tag_filter_edit, 0, 4)
+                grid.addWidget(self._projection_settings_button, 0, 5)
                 grid.addWidget(index_label, 1, 0)
                 grid.addWidget(self._projection_point_index_spinbox, 1, 1)
                 grid.addWidget(self._projection_point_world_label, 1, 2)
                 grid.addWidget(tag_label, 1, 3)
                 grid.addWidget(self._tag_edit, 1, 4)
-                grid.addWidget(self._projection_settings_button, 1, 5)
+                grid.addWidget(self._store_projections_button, 1, 5)
                 inner.addLayout(grid)
                 inner.addLayout(self._point_projection_plots_layout)
+                inner.addWidget(self._only_visible_image_stack_layers_message)
             
             if tab_title == "Projection":
                 tab2 = QWidget()
@@ -1718,6 +1760,36 @@ class MainWidget(QTabWidget):
                     del metadata['projection-sum-frames']
         
         self.update_point_projections()
+    
+    def _store_all_point_projections_in_image_layer_metadata(self):
+        """ Store all point projections in image layer metadata.
+        """
+        image_layers = self._image_layers()
+        points_layers = self._points_layers()
+
+        from qtpy.QtCore import Qt
+        from qtpy.QtWidgets import QProgressDialog
+        num_layer_combos = len(image_layers) * len(points_layers)
+        progress = QProgressDialog("Projecting points...", "Abort", 0, num_layer_combos, self)
+        progress.setWindowModality(Qt.WindowModal)
+
+        for image_layer in image_layers:
+            if progress.wasCanceled():
+                break
+            image_layer.metadata['point_projections'] = {}
+            for points_layer in points_layers:
+                if progress.wasCanceled():
+                    break
+                n_points = len(points_layer.data)
+                n_frames = image_layer.data.shape[0]
+                projections = np.zeros([n_points, n_frames])
+                for i in range(n_points):
+                    if progress.wasCanceled():
+                        break
+                    projections[i] = self.get_point_projection(image_layer, points_layer, point_index=i)
+                image_layer.metadata['point_projections'][points_layer.name] = projections
+                progress.setValue(progress.value() + 1)
+        progress.setValue(num_layer_combos)
 
 
 def clear_layout(layout: 'qtpy.QtWidgets.QLayout'):
