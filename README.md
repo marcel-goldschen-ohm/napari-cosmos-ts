@@ -11,13 +11,31 @@ conda create --name napari-env python
 ```shell
 conda activate napari-env
 ```
-4. Install `napari` and `napari-cosmos-ts` into your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
+4. Install `napari` into your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
 ```shell
-pip install "napari[all]" napari-cosmos-ts
+pip install "napari[all]"
+```
+5. Install `napari-cosmos-ts` into your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
+```shell
+pip install napari-cosmos-ts
 ```
 Or for the latest version of `napari-cosmos-ts`:
 ```shell
-pip install "napari[all]" napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts
+pip install napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts
+```
+
+# Update
+1. Activate your virtual environment (see [Install](#install), replace napari-env with the name of your environment). In a command shell or terminal run the following command:
+```shell
+conda activate napari-env
+```
+2. Update `napari-cosmos-ts` in your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
+```shell
+pip install napari-cosmos-ts --update
+```
+Or for the latest version of `napari-cosmos-ts`:
+```shell
+pip install napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts --update
 ```
 
 # Run
