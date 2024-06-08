@@ -25,7 +25,18 @@ class MainWidget(QTabWidget):
         self._layer_metadata: list[dict] = []
 
         # points layer for just the selected projection point 
-        self._selected_point_layer = None
+        # self._selected_point_layer = None
+        self._init_default_point_size = 8
+        self._selected_point_layer = Points(
+            np.array([[0, 0]]),
+            name = "selected point",
+            symbol = "disc",
+            size = [self._init_default_point_size],
+            face_color = [[0, 1, 1, 0.1]],
+            edge_color = [[0, 1, 1, 1]],
+            opacity = 1,
+            blending = "translucent_no_depth",
+        )
 
         # UI
         self._setup_ui()
@@ -230,6 +241,23 @@ class MainWidget(QTabWidget):
             self.set_projection_point(self._selected_point_layer.data)
         
         self._update_layer_selection_comboboxes()
+    
+    def export_point_projections(self, dirpath: str = None):
+        """ Export point projections to CSV file.
+        """
+        if dirpath is None:
+            from qtpy.QtWidgets import QFileDialog
+            dirpath = QFileDialog.getExistingDirectory(self, "Choose directory in which to save point projections", "")
+            if dirpath == "":
+                return
+        
+        for layer in self._imagestack_layers():
+            if 'point_projections' in layer.metadata:
+                for points_layer_name, projections in layer.metadata['point_projections'].items():
+                    df = pd.DataFrame(projections.T)
+                    df.columns = [f"Point {i}" for i in range(df.shape[1])]
+                    filename = f"{layer.name}-{points_layer_name}.csv"
+                    df.to_csv(os.path.join(dirpath, filename), index=False)
     
     def split_image_layer(self, layer: Image, regions: str = None) -> list[Image]:
         """ Split image horizontally, vertically, or into quadrants.
@@ -570,10 +598,10 @@ class MainWidget(QTabWidget):
         This will update the point projection plots for all image stack layers.
         """
         if worldpt2d is None:
-            # clear selected projection point overlay
-            if self._selected_point_layer is not None:
-                self.viewer.layers.remove(self._selected_point_layer)
-                self._selected_point_layer = None
+            # # clear selected projection point overlay
+            # if self._selected_point_layer is not None:
+            #     self.viewer.layers.remove(self._selected_point_layer)
+            #     self._selected_point_layer = None
             
             # clear point projection plots
             for metadata in self._layer_metadata:
@@ -603,10 +631,11 @@ class MainWidget(QTabWidget):
                 opacity = 1,
                 blending = "translucent_no_depth",
             )
-            self._selected_point_layer.metadata['is_selected_point_layer'] = True
             # because self._selected_point_layer is not yet defined during layer insertion
-            self._update_layer_selection_comboboxes(self._selected_point_layer)
+            # self._update_layer_selection_comboboxes(self._selected_point_layer)
         else:
+            if self._selected_point_layer not in self.viewer.layers:
+                self.viewer.add_layer(self._selected_point_layer)
             self._selected_point_layer.data = worldpt2d
             self._selected_point_layer.size = [point_size]
         
@@ -902,7 +931,7 @@ class MainWidget(QTabWidget):
             
             # current frame vertical line
             frame_index = self._current_frame()
-            vline = plot.addLine(x=frame_index, pen=pg.mkPen('y', width=1))
+            vline = plot.addLine(x=frame_index, pen=pg.mkPen(QColor(0, 0, 0), width=1))
 
             metadata['point_projection_plot'] = plot
             metadata['point_projection_data'] = data
@@ -915,6 +944,9 @@ class MainWidget(QTabWidget):
         layer.events.name.connect(self._on_layer_name_changed)
         layer.events.visible.connect(self._on_layer_visibility_changed)
         layer.events.mode.connect(self._on_layer_mode_changed)
+
+        # ensure selected point layer on top
+        self._ensure_selected_point_layer_on_top()
 
     def _on_layer_removed(self, event: Event):
         """ Callback for layer removal event.
@@ -935,7 +967,7 @@ class MainWidget(QTabWidget):
         
         # selected projection point overlay
         if self._selected_point_layer is layer:
-            self._selected_point_layer = None
+            # self._selected_point_layer = None
             self.set_projection_point(None)
         
         # update layer selection lists
@@ -965,6 +997,17 @@ class MainWidget(QTabWidget):
         # update layer selection lists
         self._update_layer_selection_comboboxes(layer)
 
+        # ensure selected point layer on top
+        self._ensure_selected_point_layer_on_top()
+
+    def _ensure_selected_point_layer_on_top(self):
+        if self._selected_point_layer is not None:
+            if self._selected_point_layer in self.viewer.layers:
+                src_index = list(self.viewer.layers).index(self._selected_point_layer)
+                dst_index = len(self.viewer.layers)
+                if src_index != dst_index - 1:
+                    self.viewer.layers.move(src_index, dst_index)
+    
     def _on_layer_name_changed(self, event: Event):
         """ Callback for layer name change event.
         """
@@ -1056,8 +1099,11 @@ class MainWidget(QTabWidget):
         """
         from qtpy.QtCore import Qt
 
-        if viewer.layers.selection.active.mode != "pan_zoom":
-            return
+        try:
+            if viewer.layers.selection.active.mode != "pan_zoom":
+                return
+        except:
+            pass
         
         # mouse press event
         # only process left-click events
@@ -1236,6 +1282,12 @@ class MainWidget(QTabWidget):
         self._save_session_button = QPushButton("Save session as .mat file")
         self._save_session_button.pressed.connect(self.export_session)
 
+        self._project_all_points_button = QPushButton("Project all points for all image stacks")
+        self._project_all_points_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
+
+        self._export_point_projections_button = QPushButton("Export point projections as .csv file")
+        self._export_point_projections_button.pressed.connect(self.export_point_projections)
+
         inner = QVBoxLayout()
         inner.setContentsMargins(0, 0, 0, 0)
         inner.setSpacing(5)
@@ -1243,6 +1295,9 @@ class MainWidget(QTabWidget):
         inner.addSpacing(10)
         inner.addWidget(self._open_session_button)
         inner.addWidget(self._save_session_button)
+        inner.addSpacing(10)
+        inner.addWidget(self._project_all_points_button)
+        inner.addWidget(self._export_point_projections_button)
         inner.addStretch()
 
         outer = QHBoxLayout()
@@ -1364,10 +1419,11 @@ class MainWidget(QTabWidget):
         Includes point settings, colocalization, and point projection.
         """
         from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit, QToolButton
+        import qtawesome as qta
 
         self._default_point_size_spinbox = QDoubleSpinBox()
-        self._default_point_size_spinbox.setValue(8)
+        self._default_point_size_spinbox.setValue(self._init_default_point_size)
 
         self._default_point_mask_grid = QGridLayout()
         self._default_point_mask_grid.setContentsMargins(5, 5, 5, 5)
@@ -1442,11 +1498,13 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit = QLineEdit()
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
-        self._projection_settings_button = QPushButton("Settings")
+        self._projection_settings_button = QToolButton()
+        self._projection_settings_button.setIcon(qta.icon("fa.cog"))
         self._projection_settings_button.setToolTip("Point projection options.")
         self._projection_settings_button.pressed.connect(self._edit_projection_settings)
 
-        self._store_projections_button = QPushButton("Store")
+        self._store_projections_button = QToolButton()
+        self._store_projections_button.setIcon(qta.icon("mdi.database-arrow-up"))
         self._store_projections_button.setToolTip("Store all point projections in image layer metadata.")
         self._store_projections_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
 
@@ -1456,7 +1514,7 @@ class MainWidget(QTabWidget):
             inner.setContentsMargins(0, 0, 0, 0)
             inner.setSpacing(5)
             if tab_title == "Point":
-                msg = QLabel("Point projections use a circular mask centered on the point with pixel diameter equal to the selected point's size. For projecting an arbitrary position, the default size below will be used.")
+                msg = QLabel("Point projections use a circular mask centered on the point with pixel diameter equal to the selected point's size.")
                 msg.setWordWrap(True)
 
                 group = QGroupBox()
@@ -1697,18 +1755,24 @@ class MainWidget(QTabWidget):
             binwidth = self._coloc_hist_binwidth_spinbox.value()
         
         if layer is not None:
-            points = self._transform_points2d_from_layer_to_world(layer.data[:,-2:], layer)
-            points_pairwise_distances = distance.squareform(distance.pdist(points))
-            np.fill_diagonal(points_pairwise_distances, np.inf)
-            points_nearest_neighbors = np.min(points_pairwise_distances, axis=1).flatten()
-            points_nearest_neighbors = points_nearest_neighbors[~np.isinf(points_nearest_neighbors)]
+            if layer.data.size == 0:
+                layer = None
+            else:
+                points = self._transform_points2d_from_layer_to_world(layer.data[:,-2:], layer)
+                points_pairwise_distances = distance.squareform(distance.pdist(points))
+                np.fill_diagonal(points_pairwise_distances, np.inf)
+                points_nearest_neighbors = np.min(points_pairwise_distances, axis=1).flatten()
+                points_nearest_neighbors = points_nearest_neighbors[~np.isinf(points_nearest_neighbors)]
         
         if neighbors_layer is not None:
-            neighbors = self._transform_points2d_from_layer_to_world(neighbors_layer.data[:,-2:], neighbors_layer)
-            neighbors_pairwise_distances = distance.squareform(distance.pdist(neighbors))
-            np.fill_diagonal(neighbors_pairwise_distances, np.inf)
-            neighbors_nearest_neighbors = np.min(neighbors_pairwise_distances, axis=1).flatten()
-            neighbors_nearest_neighbors = neighbors_nearest_neighbors[~np.isinf(neighbors_nearest_neighbors)]
+            if neighbors_layer.data.size == 0:
+                neighbors_layer = None
+            else:
+                neighbors = self._transform_points2d_from_layer_to_world(neighbors_layer.data[:,-2:], neighbors_layer)
+                neighbors_pairwise_distances = distance.squareform(distance.pdist(neighbors))
+                np.fill_diagonal(neighbors_pairwise_distances, np.inf)
+                neighbors_nearest_neighbors = np.min(neighbors_pairwise_distances, axis=1).flatten()
+                neighbors_nearest_neighbors = neighbors_nearest_neighbors[~np.isinf(neighbors_nearest_neighbors)]
 
         if layer is not None and neighbors_layer is not None:
             within_layer_nearest_neighbors = np.concatenate([points_nearest_neighbors, neighbors_nearest_neighbors])

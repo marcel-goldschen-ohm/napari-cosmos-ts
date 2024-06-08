@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:9923ebd6608b1ec19f97c9466c8c8390c62c741ddd842612d53ab1aa6f42c891"
+content_hash = "sha256:37af8d8cd6acffda8b43729d51ff4d968fa181eee0fe423aa44d03c2b53930ff"
 
 [[package]]
 name = "alabaster"
@@ -1678,6 +1678,20 @@ files = [
     {file = "pyzmq-25.1.2-pp39-pypy39_pp73-manylinux_2_28_x86_64.whl", hash = "sha256:3516e0b6224cf6e43e341d56da15fd33bdc37fa0c06af4f029f7d7dfceceabbc"},
     {file = "pyzmq-25.1.2-pp39-pypy39_pp73-win_amd64.whl", hash = "sha256:146b9b1f29ead41255387fb07be56dc29639262c0f7344f570eecdcd8d683314"},
     {file = "pyzmq-25.1.2.tar.gz", hash = "sha256:93f1aa311e8bb912e34f004cf186407a4e90eec4f0ecc0efd26056bf7eda0226"},
+]
+
+[[package]]
+name = "qtawesome"
+version = "1.3.1"
+requires_python = ">=3.7"
+summary = "FontAwesome icons in PyQt and PySide applications"
+groups = ["default"]
+dependencies = [
+    "qtpy",
+]
+files = [
+    {file = "QtAwesome-1.3.1-py3-none-any.whl", hash = "sha256:6078449035cd5311bc461e99940a426c27cb919fb4211c8cfc64506cb71e2dd7"},
+    {file = "QtAwesome-1.3.1.tar.gz", hash = "sha256:075b2c9ee01cbaf5e3a4bebed0e5529ee8605981355f21dea051b15c1b869e1b"},
 ]
 
 [[package]]
