@@ -61,6 +61,13 @@ class MainWidget(QTabWidget):
                 return
         session_abspath = os.path.abspath(filepath)
         session_absdir, session_file = os.path.split(session_abspath)
+
+        # progress bar
+        from qtpy.QtCore import Qt
+        from qtpy.QtWidgets import QProgressDialog, QApplication
+        progress = QProgressDialog("Exporting session...", None, 0, 2, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
         
         # session dict
         session = {}
@@ -69,6 +76,12 @@ class MainWidget(QTabWidget):
         session['users'] = self._users_edit.text() + " "
         session['notes'] = self._notes_edit.toPlainText() + " "
         session['default_point_size'] = self._default_point_size_spinbox.value()
+
+        # ensure points layer names can be used as fieldnames in a MATLAB struct
+        for layer in self._points_layers():
+            fieldname = self._get_valid_struct_fieldname(layer.name)
+            if fieldname != layer.name:
+                layer.name = fieldname
         
         # layer dicts
         session['layers'] = []
@@ -125,7 +138,16 @@ class MainWidget(QTabWidget):
             session['layers'].append(layer_data)
         
         # save session to .mat file
+        progress.setValue(1)
+        QApplication.processEvents()
+        import time
+        tic = time.time()
         savemat(filepath, session)
+        toc = time.time()
+        print(f"savemat took {toc - tic:.2f} seconds.")
+
+        # close progress bar
+        progress.close()
     
     def import_session(self, filepath: str = None):
         """ Import data from MATLAB .mat file.
@@ -140,10 +162,24 @@ class MainWidget(QTabWidget):
         session_abspath = os.path.abspath(filepath)
         session_absdir, session_file = os.path.split(session_abspath)
 
+        # progress bar
+        from qtpy.QtCore import Qt
+        from qtpy.QtWidgets import QProgressDialog, QApplication
+        progress = QProgressDialog("Importing session...", None, 0, 2, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+
         self.viewer.layers.clear()
         self._selected_point_layer = None
 
+        import time
+        tic = time.time()
         session = loadmat(filepath, simplify_cells=True)
+        toc = time.time()
+        print(f"loadmat took {toc - tic:.2f} seconds.")
+        
+        progress.setValue(1)
+        QApplication.processEvents()
 
         for key, value in session.items():
             if key == "date":
@@ -1014,8 +1050,12 @@ class MainWidget(QTabWidget):
         layer_index = event.index
         layer = self.viewer.layers[layer_index]
         metadata = self._layer_metadata[layer_index]
-        # old_name = event.old
-        print(event.__dict__.keys())
+
+        # # ensure layer name is a valid struct fieldname
+        # fieldname = self._get_valid_struct_fieldname(layer.name)
+        # if fieldname != layer.name:
+        #     layer.name = fieldname
+        #     return
         
         # image stack
         if isinstance(layer, Image) and layer.data.ndim == 3:
@@ -1844,14 +1884,15 @@ class MainWidget(QTabWidget):
     def _store_all_point_projections_in_image_layer_metadata(self):
         """ Store all point projections in image layer metadata.
         """
-        image_layers = self._image_layers()
+        image_layers = self._imagestack_layers()
         points_layers = self._points_layers()
 
         from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import QProgressDialog
+        from qtpy.QtWidgets import QProgressDialog, QApplication
         num_layer_combos = len(image_layers) * len(points_layers)
         progress = QProgressDialog("Projecting points...", "Abort", 0, num_layer_combos, self)
         progress.setWindowModality(Qt.WindowModal)
+        progress.show()
 
         for image_layer in image_layers:
             if progress.wasCanceled():
@@ -1861,7 +1902,7 @@ class MainWidget(QTabWidget):
                 if progress.wasCanceled():
                     break
                 n_points = len(points_layer.data)
-                n_frames = image_layer.data.shape[0]
+                n_frames = image_layer.data.shape[-3]
                 projections = np.zeros([n_points, n_frames])
                 for i in range(n_points):
                     if progress.wasCanceled():
@@ -1869,7 +1910,16 @@ class MainWidget(QTabWidget):
                     projections[i] = self.get_point_projection(image_layer, points_layer, point_index=i)
                 image_layer.metadata['point_projections'][points_layer.name] = projections
                 progress.setValue(progress.value() + 1)
+                QApplication.processEvents()
         progress.setValue(num_layer_combos)
+    
+    def _get_valid_struct_fieldname(self, text: str) -> str:
+        """ Convert text to valid struct field name.
+        """
+        text = text.replace(' ', '_')
+        text = text.replace('[', '')
+        text = text.replace(']', '')
+        return text
 
 
 def clear_layout(layout: 'qtpy.QtWidgets.QLayout'):
