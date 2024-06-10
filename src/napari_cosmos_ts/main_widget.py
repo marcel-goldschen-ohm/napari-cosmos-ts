@@ -48,6 +48,12 @@ class MainWidget(QTabWidget):
         self.viewer.dims.events.current_step.connect(self._on_dim_step_changed)
         self.viewer.mouse_drag_callbacks.append(self._on_mouse_clicked_or_dragged)
         self.viewer.mouse_double_click_callbacks.append(self._on_mouse_doubleclicked)
+
+        # expose plugin widget instance to ipython console
+        try:
+            viewer.window._qt_viewer.console.push({"cosmosts": self})
+        except:
+            pass
     
     def export_session(self, filepath: str = None):
         """ Export data to MATLAB .mat file.
