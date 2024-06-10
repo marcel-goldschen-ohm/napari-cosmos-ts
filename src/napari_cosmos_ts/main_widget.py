@@ -24,8 +24,7 @@ class MainWidget(QTabWidget):
         # Data that can be serialized and should be saved should be stored in the individual layer metadata dicts.
         self._layer_metadata: list[dict] = []
 
-        # points layer for just the selected projection point 
-        # self._selected_point_layer = None
+        # points layer for just the selected projection point
         self._init_default_point_size = 8
         self._selected_point_layer = Points(
             np.array([[0, 0]]),
@@ -56,13 +55,13 @@ class MainWidget(QTabWidget):
             pass
     
     def export_session(self, filepath: str = None):
-        """ Export data to MATLAB .mat file.
+        """ Export data to an HDF5 file.
         """
-        from scipy.io import savemat
+        import h5py
 
         if filepath is None:
             from qtpy.QtWidgets import QFileDialog
-            filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "MATLAB files (*.mat)")
+            filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "HDF5 (*.hdf5 *.h5)")
             if filepath == "":
                 return
         session_abspath = os.path.abspath(filepath)
@@ -70,99 +69,91 @@ class MainWidget(QTabWidget):
 
         # progress bar
         from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import QProgressDialog, QApplication
-        progress = QProgressDialog("Exporting session...", None, 0, 2, self)
+        from qtpy.QtWidgets import QProgressDialog
+        progress = QProgressDialog("Exporting session...", None, 0, 0, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
-        
-        # session dict
-        session = {}
-        session['date'] = self._date_edit.text() + " "
-        session['ID'] = self._id_edit.text() + " "
-        session['users'] = self._users_edit.text() + " "
-        session['notes'] = self._notes_edit.toPlainText() + " "
-        session['default_point_size'] = self._default_point_size_spinbox.value()
 
-        # ensure points layer names can be used as fieldnames in a MATLAB struct
-        for layer in self._points_layers():
-            fieldname = self._get_valid_struct_fieldname(layer.name)
-            if fieldname != layer.name:
-                layer.name = fieldname
+        # HDF5 session file
+        session_file = h5py.File(session_abspath,'w')
+        session_file.attrs['date'] = self._date_edit.text()
+        session_file.attrs['ID'] = self._id_edit.text()
+        session_file.attrs['users'] = self._users_edit.text()
+        session_file.attrs['notes'] = self._notes_edit.toPlainText()
+        session_file.attrs['default_point_size'] = self._default_point_size_spinbox.value()
         
-        # layer dicts
-        session['layers'] = []
+        # HDF5
+        layers_group = session_file.create_group('Layers')
         for layer in self.viewer.layers:
-            layer_data = {}
-            layer_data['name'] = layer.name
-            layer_data['affine'] = layer.affine.affine_matrix
-            layer_data['opacity'] = layer.opacity
-            layer_data['blending'] = layer.blending
-            layer_data['visible'] = layer.visible
-
             if isinstance(layer, Image):
-                layer_data['type'] = 'image'
+                layer_group = layers_group.create_group(layer.name)
+                layer_group.attrs['type'] = 'Image'
                 image_abspath = self._image_layer_abspath(layer)
-                if image_abspath is not None:
-                    image_relpath = os.path.relpath(image_abspath, start=session_absdir)
-                    layer_data['abspath'] = image_abspath
-                    layer_data['relpath'] = image_relpath
                 if image_abspath is None:
                     # store image data if it does not already exist on disk
-                    layer_data['data'] = layer.data
-                if 'data' not in layer_data:
-                    # if image data is not stored in the session, store shape and dtype
-                    layer_data['data_shape'] = layer.data.shape
-                    layer_data['data_dtype'] = str(layer.data.dtype)
-                layer_data['contrast_limits'] = layer.contrast_limits
-                layer_data['gamma'] = layer.gamma
-                layer_data['colormap'] = layer.colormap.name
-                layer_data['interpolation2d'] = layer.interpolation2d
-            
+                    layer_dataset = layer_group.create_dataset('data', data=layer.data)
+                else:
+                    # store image file path (relative to session file)
+                    image_relpath = os.path.relpath(image_abspath, start=session_absdir)
+                    layer_group.attrs['abspath'] = image_abspath
+                    layer_group.attrs['relpath'] = image_relpath
+                layer_group.attrs['contrast_limits'] = layer.contrast_limits
+                layer_group.attrs['gamma'] = layer.gamma
+                layer_group.attrs['colormap'] = layer.colormap.name
+                layer_group.attrs['interpolation2d'] = layer.interpolation2d
             elif isinstance(layer, Points):
-                layer_data['type'] = 'points'
-                layer_data['data'] = layer.data
-                layer_data['size'] = layer.size
-                layer_data['symbol'] = [str(symbol) for symbol in layer.symbol]
-                layer_data['face_color'] = layer.face_color
-                layer_data['edge_color'] = layer.edge_color
-                layer_data['edge_width'] = layer.edge_width
-                layer_data['edge_width_is_relative'] = layer.edge_width_is_relative
-
+                layer_group = layers_group.create_group(layer.name)
+                layer_group.attrs['type'] = 'Points'
+                layer_dataset = layer_group.create_dataset('data', data=layer.data)
+                layer_group.attrs['size'] = layer.size
+                layer_group.attrs['symbol'] = [str(symbol) for symbol in layer.symbol]
+                layer_group.attrs['face_color'] = layer.face_color
+                layer_group.attrs['edge_color'] = layer.edge_color
+                layer_group.attrs['edge_width'] = layer.edge_width
+                layer_group.attrs['edge_width_is_relative'] = layer.edge_width_is_relative
                 if not layer.features.empty:
-                    layer_data['features'] = {}
+                    features_group = layer_group.create_group('Features')
                     for key in layer.features:
                         if key == 'tags':
                             layer.features['tags'] = layer.features['tags'].fillna("")
-                            layer.features['tags'] = layer.features['tags'].replace("", " ")
-                        layer_data['features'][key] = layer.features[key].to_numpy()
-            
-            # layer metadata
-            if layer.metadata:
-                layer_data['metadata'] = layer.metadata
-            
-            # add layer data to session
-            session['layers'].append(layer_data)
+                            # layer.features['tags'] = layer.features['tags'].replace("", " ")
+                        feature = layer.features[key].to_numpy()
+                        if feature.dtype == np.object:
+                            feature = feature.astype(str)
+                        feature_dataset = features_group.create_dataset(key, data=feature)
+            else:
+                continue
+            layer_group.attrs['affine'] = layer.affine.affine_matrix
+            layer_group.attrs['opacity'] = layer.opacity
+            layer_group.attrs['blending'] = layer.blending
+            layer_group.attrs['visible'] = layer.visible
+
+            metadata = {key: value for key, value in layer.metadata.items() if key != 'point_projections'}
+            if metadata:
+                layer_group.attrs['metadata'] = metadata
         
-        # save session to .mat file
-        progress.setValue(1)
-        QApplication.processEvents()
-        import time
-        tic = time.time()
-        savemat(filepath, session)
-        toc = time.time()
-        print(f"savemat took {toc - tic:.2f} seconds.")
+        # point projections
+        projections_group = session_file.create_group('Point Projections')
+        for imagestack_layer in self._imagestack_layers():
+            if 'point_projections' in imagestack_layer.metadata:
+                for points_layer_name, projections in imagestack_layer.metadata['point_projections'].items():
+                    projections_dataset = projections_group.create_dataset(f'{imagestack_layer.name}-{points_layer_name}', data=projections)
+                    projections_dataset.attrs['image layer name'] = imagestack_layer.name
+                    projections_dataset.attrs['points layer name'] = points_layer_name
+
+        session_file.close()
 
         # close progress bar
         progress.close()
     
     def import_session(self, filepath: str = None):
-        """ Import data from MATLAB .mat file.
+        """ Import data from an HDF5 file.
         """
-        from scipy.io import loadmat
+        import h5py
 
         if filepath is None:
             from qtpy.QtWidgets import QFileDialog
-            filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "MATLAB files (*.mat)")
+            filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "HDF5 (*.hdf5 *.h5)")
             if filepath == "":
                 return
         session_abspath = os.path.abspath(filepath)
@@ -170,119 +161,241 @@ class MainWidget(QTabWidget):
 
         # progress bar
         from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import QProgressDialog, QApplication
-        progress = QProgressDialog("Importing session...", None, 0, 2, self)
+        from qtpy.QtWidgets import QProgressDialog
+        progress = QProgressDialog("Importing session...", None, 0, 0, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
 
+        # HDF5 session file
+        session_file = h5py.File(session_abspath,'r')
+
+        if self._selected_point_layer in self.viewer.layers:
+            self.viewer.layers.remove(self._selected_point_layer)
         self.viewer.layers.clear()
-        self._selected_point_layer = None
 
-        import time
-        tic = time.time()
-        session = loadmat(filepath, simplify_cells=True)
-        toc = time.time()
-        print(f"loadmat took {toc - tic:.2f} seconds.")
-        
-        progress.setValue(1)
-        QApplication.processEvents()
+        self._date_edit.setText(str(session_file.attrs['date']))
+        self._id_edit.setText(str(session_file.attrs['ID']))
+        self._users_edit.setText(str(session_file.attrs['users']))
+        self._notes_edit.setPlainText(str(session_file.attrs['notes']))
+        self._default_point_size_spinbox.setValue(session_file.attrs['default_point_size'])
 
-        for key, value in session.items():
-            if key == "date":
-                self._date_edit.setText(str(value).strip())
-            elif key == "ID":
-                self._id_edit.setText(str(value).strip())
-            elif key == "users":
-                self._users_edit.setText(str(value).strip())
-            elif key == "notes":
-                self._notes_edit.setPlainText(str(value).strip())
-            elif key == "default_point_size":
-                self._default_point_size_spinbox.setValue(session['default_point_size'])
-            elif key == "layers":
-                for layer_data in value:
-                    layer = None
-                    
-                    if layer_data['type'] == 'image':
-                        abspath = None
-                        if 'relpath' in layer_data:
-                            relpath = layer_data['relpath']
-                            abspath = os.path.join(session_absdir, relpath)
-                        elif 'abspath' in layer_data:
-                            abspath = layer_data['abspath']
-                        
-                        if 'data' in layer_data:
-                            image = layer_data['data']
-                            layer = self.viewer.add_image(image)
-                        elif abspath is not None:
-                            try:
-                                layer = self.viewer.open(abspath, layer_type="image")[0]
-                            except Exception as error:
-                                print(error)
-                        if layer is None:
+        did_load_selected_point_layer = False
+        if 'Layers' in session_file:
+            layers_group = session_file['Layers']
+            for layer_name, layer_group in layers_group.items():
+                layer = None
+                if layer_group.attrs['type'] == 'Image':
+                    image_abspath = None
+                    if 'data' in layer_group:
+                        layer_dataset = layer_group['data']
+                        layer = self.viewer.add_image(layer_dataset[:])
+                    else:
+                        if 'relpath' in layer_group.attrs:
+                            image_relpath = layer_group.attrs['relpath']
+                            image_abspath = os.path.join(session_absdir, image_relpath)
+                        elif 'abspath' in layer_group.attrs:
+                            image_abspath = layer_group.attrs['abspath']
+                        if image_abspath is None:
                             continue
-                        
-                        if 'contrast_limits' in layer_data:
-                            layer.contrast_limits = layer_data['contrast_limits']
-                        if 'gamma' in layer_data:
-                            layer.gamma = layer_data['gamma']
-                        if 'colormap' in layer_data:
-                            layer.colormap = layer_data['colormap']
-                        if 'interpolation2d' in layer_data:
-                            layer.interpolation2d = layer_data['interpolation2d']
+                        try:
+                            layer = self.viewer.open(image_abspath, layer_type="image")[0]
+                        except Exception as error:
+                            print(error)
+                            continue
+                    if 'contrast_limits' in layer_group.attrs:
+                        layer.contrast_limits = layer_group.attrs['contrast_limits']
+                    if 'gamma' in layer_group.attrs:
+                        layer.gamma = layer_group.attrs['gamma']
+                    if 'colormap' in layer_group.attrs:
+                        layer.colormap = layer_group.attrs['colormap']
+                    if 'interpolation2d' in layer_group.attrs:
+                        layer.interpolation2d = layer_group.attrs['interpolation2d']
+            
+                elif layer_group.attrs['type'] == 'Points':
+                    if 'data' in layer_group:
+                        layer_dataset = layer_group['data']
+                        if layer_name == self._selected_point_layer.name:
+                            layer = self._selected_point_layer
+                            layer.data = layer_dataset[:]
+                            if self._selected_point_layer not in self.viewer.layers:
+                                self.viewer.add_layer(self._selected_point_layer)
+                            did_load_selected_point_layer = True
+                        else:
+                            layer = self.viewer.add_points(layer_dataset[:])
+                    else:
+                        continue
+                    if 'size' in layer_group.attrs:
+                        layer.size = layer_group.attrs['size']
+                    if 'symbol' in layer_group.attrs:
+                        layer.symbol = layer_group.attrs['symbol']
+                    if 'face_color' in layer_group.attrs:
+                        layer.face_color = layer_group.attrs['face_color']
+                    if 'edge_color' in layer_group.attrs:
+                        layer.edge_color = layer_group.attrs['edge_color']
+                    if 'edge_width' in layer_group.attrs:
+                        layer.edge_width = layer_group.attrs['edge_width']
+                    if 'edge_width_is_relative' in layer_group.attrs:
+                        layer.edge_width_is_relative = layer_group.attrs['edge_width_is_relative']
                     
-                    elif layer_data['type'] == 'points':
-                        points = layer_data['data']
-                        layer = self.viewer.add_points(points)
-                        
-                        if 'size' in layer_data:
-                            layer.size = layer_data['size']
-                        if 'symbol' in layer_data:
-                            layer.symbol = layer_data['symbol']
-                        if 'face_color' in layer_data:
-                            layer.face_color = layer_data['face_color']
-                        if 'edge_color' in layer_data:
-                            layer.edge_color = layer_data['edge_color']
-                        if 'edge_width' in layer_data:
-                            layer.edge_width = layer_data['edge_width']
-                        if 'edge_width_is_relative' in layer_data:
-                            layer.edge_width_is_relative = layer_data['edge_width_is_relative']
-                        
-                        n_points = len(layer.data)
-                        features = pd.DataFrame({"tags": [""] * n_points})
-                        if 'features' in layer_data:
-                            for key in layer_data['features']:
-                                features[key] = layer_data['features'][key]
-                                if key == "tags":
-                                    features['tags'] = features['tags'].replace(" ", "")
-                        layer.features = features
-                    
-                    if 'name' in layer_data:
-                        layer.name = layer_data['name']
-                    if 'affine' in layer_data:
-                        layer.affine = layer_data['affine']
-                    if 'opacity' in layer_data:
-                        layer.opacity = layer_data['opacity']
-                    if 'blending' in layer_data:
-                        layer.blending = layer_data['blending']
-                    if 'visible' in layer_data:
-                        layer.visible = layer_data['visible']
-                    if 'metadata' in layer_data:
-                        layer.metadata = layer_data['metadata']
-                    
-                    if isinstance(layer, Image):
-                        if abspath is not None:
-                            layer.metadata['abspath'] = abspath
-                        if 'slice' in layer.metadata:
-                            slice_str = layer.metadata['slice']
-                            layer.data = layer.data[slice_from_str(slice_str)]
-                    elif isinstance(layer, Points):
-                        if 'is_selected_point_layer' in layer.metadata:
-                            self._selected_point_layer = layer
+                    n_points = len(layer.data)
+                    features = pd.DataFrame({"tags": [""] * n_points})
+                    if 'Features' in layer_group:
+                        features_group = layer_group['Features']
+                        for key, feature_dataset in features_group.items():
+                            features[key] = feature_dataset[:]
+                    layer.features = features
+                
+                else:
+                    print('Unknown layer type:', layer_group.attrs['type'])
+            
+                if layer is None:
+                    continue
+
+                layer.name = layer_name
+                
+                if 'affine' in layer_group.attrs:
+                    layer.affine = layer_group.attrs['affine']
+                if 'opacity' in layer_group.attrs:
+                    layer.opacity = layer_group.attrs['opacity']
+                if 'blending' in layer_group.attrs:
+                    layer.blending = layer_group.attrs['blending']
+                if 'visible' in layer_group.attrs:
+                    layer.visible = bool(layer_group.attrs['visible'])
+                
+                if 'metadata' in layer_group.attrs:
+                    for key, value in layer_group.attrs['metadata'].items():
+                        layer.metadata[key] = value
+            
+                if isinstance(layer, Image):
+                    if image_abspath is not None:
+                        layer.metadata['abspath'] = image_abspath
+                    if 'slice' in layer.metadata:
+                        slice_str = layer.metadata['slice']
+                        layer.data = layer.data[slice_from_str(slice_str)]
         
-        if self._selected_point_layer is not None:
+        if 'Point Projections' in session_file:
+            projections_group = session_file['Point Projections']
+            for projection_dataset in projections_group.values():
+                image_layer_name = projection_dataset.attrs['image layer name']
+                points_layer_name = projection_dataset.attrs['points layer name']
+                image_layer = self.viewer.layers[image_layer_name]
+                if 'point_projections' not in image_layer.metadata:
+                    image_layer.metadata['point_projections'] = {}
+                image_layer.metadata['point_projections'][points_layer_name] = projection_dataset[:]
+
+        # self.viewer.layers.clear()
+        # self._selected_point_layer = None
+
+        # import time
+        # tic = time.time()
+        # session = loadmat(filepath, simplify_cells=True)
+        # toc = time.time()
+        # print(f"loadmat took {toc - tic:.2f} seconds.")
+        
+        # progress.setValue(1)
+        # QApplication.processEvents()
+
+        # for key, value in session.items():
+        #     if key == "date":
+        #         self._date_edit.setText(str(value).strip())
+        #     elif key == "ID":
+        #         self._id_edit.setText(str(value).strip())
+        #     elif key == "users":
+        #         self._users_edit.setText(str(value).strip())
+        #     elif key == "notes":
+        #         self._notes_edit.setPlainText(str(value).strip())
+        #     elif key == "default_point_size":
+        #         self._default_point_size_spinbox.setValue(session['default_point_size'])
+        #     elif key == "layers":
+        #         for layer_data in value:
+        #             layer = None
+                    
+        #             if layer_data['type'] == 'image':
+        #                 abspath = None
+        #                 if 'relpath' in layer_data:
+        #                     relpath = layer_data['relpath']
+        #                     abspath = os.path.join(session_absdir, relpath)
+        #                 elif 'abspath' in layer_data:
+        #                     abspath = layer_data['abspath']
+                        
+        #                 if 'data' in layer_data:
+        #                     image = layer_data['data']
+        #                     layer = self.viewer.add_image(image)
+        #                 elif abspath is not None:
+        #                     try:
+        #                         layer = self.viewer.open(abspath, layer_type="image")[0]
+        #                     except Exception as error:
+        #                         print(error)
+        #                 if layer is None:
+        #                     continue
+                        
+        #                 if 'contrast_limits' in layer_data:
+        #                     layer.contrast_limits = layer_data['contrast_limits']
+        #                 if 'gamma' in layer_data:
+        #                     layer.gamma = layer_data['gamma']
+        #                 if 'colormap' in layer_data:
+        #                     layer.colormap = layer_data['colormap']
+        #                 if 'interpolation2d' in layer_data:
+        #                     layer.interpolation2d = layer_data['interpolation2d']
+                    
+        #             elif layer_data['type'] == 'points':
+        #                 points = layer_data['data']
+        #                 layer = self.viewer.add_points(points)
+                        
+        #                 if 'size' in layer_data:
+        #                     layer.size = layer_data['size']
+        #                 if 'symbol' in layer_data:
+        #                     layer.symbol = layer_data['symbol']
+        #                 if 'face_color' in layer_data:
+        #                     layer.face_color = layer_data['face_color']
+        #                 if 'edge_color' in layer_data:
+        #                     layer.edge_color = layer_data['edge_color']
+        #                 if 'edge_width' in layer_data:
+        #                     layer.edge_width = layer_data['edge_width']
+        #                 if 'edge_width_is_relative' in layer_data:
+        #                     layer.edge_width_is_relative = layer_data['edge_width_is_relative']
+                        
+        #                 n_points = len(layer.data)
+        #                 features = pd.DataFrame({"tags": [""] * n_points})
+        #                 if 'features' in layer_data:
+        #                     for key in layer_data['features']:
+        #                         features[key] = layer_data['features'][key]
+        #                         if key == "tags":
+        #                             features['tags'] = features['tags'].replace(" ", "")
+        #                 layer.features = features
+                    
+        #             if 'name' in layer_data:
+        #                 layer.name = layer_data['name']
+        #             if 'affine' in layer_data:
+        #                 layer.affine = layer_data['affine']
+        #             if 'opacity' in layer_data:
+        #                 layer.opacity = layer_data['opacity']
+        #             if 'blending' in layer_data:
+        #                 layer.blending = layer_data['blending']
+        #             if 'visible' in layer_data:
+        #                 layer.visible = layer_data['visible']
+        #             if 'metadata' in layer_data:
+        #                 layer.metadata = layer_data['metadata']
+                    
+        #             if isinstance(layer, Image):
+        #                 if abspath is not None:
+        #                     layer.metadata['abspath'] = abspath
+        #                 if 'slice' in layer.metadata:
+        #                     slice_str = layer.metadata['slice']
+        #                     layer.data = layer.data[slice_from_str(slice_str)]
+        #             elif isinstance(layer, Points):
+        #                 if 'is_selected_point_layer' in layer.metadata:
+        #                     self._selected_point_layer = layer
+
+        session_file.close()
+        
+        if did_load_selected_point_layer:
             self.set_projection_point(self._selected_point_layer.data)
         
         self._update_layer_selection_comboboxes()
+
+        # close progress bar
+        progress.close()
     
     def export_point_projections(self, dirpath: str = None):
         """ Export point projections to CSV file.
@@ -1319,13 +1432,13 @@ class MainWidget(QTabWidget):
         """
         from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QLabel
 
-        msg = QLabel("!!! Session stores the relative path to each image stack file, NOT the data itself. It is up to you to maintain this file structure.\nSession .mat files can be accessed in MATLAB.")
+        msg = QLabel("!!! Sessions store the relative path to each image file, NOT the data itself. It is up to you to maintain this file structure.\nSession HDF5 files can be accessed in MATLAB (e.g., see load_napari_cosmos_ts_session.m in this repo).")
         msg.setWordWrap(True)
 
-        self._open_session_button = QPushButton("Open .mat session file")
+        self._open_session_button = QPushButton("Open HDF5 session file")
         self._open_session_button.pressed.connect(self.import_session)
 
-        self._save_session_button = QPushButton("Save session as .mat file")
+        self._save_session_button = QPushButton("Save session as HDF5 file")
         self._save_session_button.pressed.connect(self.export_session)
 
         self._project_all_points_button = QPushButton("Project all points for all image stacks")
