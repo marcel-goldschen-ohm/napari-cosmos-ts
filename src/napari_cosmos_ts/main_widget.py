@@ -138,8 +138,8 @@ class MainWidget(QTabWidget):
             if 'point_projections' in imagestack_layer.metadata:
                 for points_layer_name, projections in imagestack_layer.metadata['point_projections'].items():
                     projections_dataset = projections_group.create_dataset(f'{imagestack_layer.name}-{points_layer_name}', data=projections)
-                    projections_dataset.attrs['image layer name'] = imagestack_layer.name
-                    projections_dataset.attrs['points layer name'] = points_layer_name
+                    projections_dataset.attrs['image_layer_name'] = imagestack_layer.name
+                    projections_dataset.attrs['points_layer_name'] = points_layer_name
 
         session_file.close()
 
@@ -276,8 +276,8 @@ class MainWidget(QTabWidget):
         if 'Point Projections' in session_file:
             projections_group = session_file['Point Projections']
             for projection_dataset in projections_group.values():
-                image_layer_name = projection_dataset.attrs['image layer name']
-                points_layer_name = projection_dataset.attrs['points layer name']
+                image_layer_name = projection_dataset.attrs['image_layer_name']
+                points_layer_name = projection_dataset.attrs['points_layer_name']
                 image_layer = self.viewer.layers[image_layer_name]
                 if 'point_projections' not in image_layer.metadata:
                     image_layer.metadata['point_projections'] = {}
