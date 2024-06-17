@@ -1699,10 +1699,10 @@ class MainWidget(QTabWidget):
         msg = QLabel("!!! Sessions store the relative path to each image file, NOT the data itself. It is up to you to maintain this file structure.\nSession HDF5 files can be accessed in MATLAB (e.g., see load_napari_cosmos_ts_session.m in this repo).")
         msg.setWordWrap(True)
 
-        self._open_session_button = QPushButton("Open HDF5 session file")
+        self._open_session_button = QPushButton("Open session as HDF5 or MATLAB file")
         self._open_session_button.pressed.connect(self.import_session)
 
-        self._save_session_button = QPushButton("Save session as HDF5 file")
+        self._save_session_button = QPushButton("Save session as HDF5 or MATLAB file")
         self._save_session_button.pressed.connect(self.export_session)
 
         self._project_all_points_button = QPushButton("Project all points for all image stacks")
