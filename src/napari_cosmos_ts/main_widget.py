@@ -657,6 +657,9 @@ class MainWidget(QTabWidget):
             self.set_projection_point(self._selected_point_layer.data)
         
         self._update_layer_selection_comboboxes()
+
+        # close progress bar
+        progress.close()
     
     def export_point_projections(self, dirpath: str = None):
         """ Export point projections to CSV file.
