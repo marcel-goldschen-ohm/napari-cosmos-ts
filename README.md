@@ -1,7 +1,38 @@
 # napari-cosmos-ts
 [napari](https://napari.org/stable/) plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS) analysis.
 
-# Install
+- [Install](#install)
+- [Run](#run)
+- [Documentation](#documentation)
+
+## Install
+If you are unfamiliar with how to create a python environment or pip install a package, see the [detailed installation instructions below](#install-for-beginners).
+
+Requires [napari](https://github.com/napari/napari).
+```shell
+pip install "napari[all]"
+```
+Install latest release version:
+```shell
+pip install napari-cosmos-ts
+```
+Or install latest development version:
+```shell
+pip install napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts
+```
+To upgrade a previously installed version, simply add the `--upgrade` flag to the above install commands.
+
+## Run
+Launch the `napari` viewer. In a command shell or terminal *where you have activated the virtual environment where you installed napari-cosmos-ts* run the following command:
+```shell
+napari
+```
+Launch the `napari-cosmos-ts` plugin: From the napari viewer `Plugins menu` select `Colocalization Single-Molecule Time Series (napari-cosmos-ts)`. This should bring up the napari-cosmos-ts docked widget within the viewer.
+
+## Documentation
+:construction:
+
+## Install for Beginners
 1. Install the `conda` package manager. Simplest is to download [Miniconda](https://docs.conda.io/en/main/miniconda.html) and run the installer.
 2. Create a virtual python environment named `napari-env` (or name it whatever you want) in which to install [napari](https://napari.org/stable/) and this plugin. In a command shell or terminal run the following command:
 ```shell
@@ -23,31 +54,4 @@ Or for the latest version of `napari-cosmos-ts`:
 ```shell
 pip install napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts
 ```
-
-# Run
-1. Activate your virtual environment (see [Install](#install), replace napari-env with the name of your environment). In a command shell or terminal run the following command:
-```shell
-conda activate napari-env
-```
-2. Launch the `napari` viewer. In a command shell or terminal *where you have activated your virtual environment* run the following command:
-```shell
-napari
-```
-3. Launch the `napari-cosmos-ts` plugin. From the napari viewer `Plugins menu`, select `Colocalization Single-Molecule Time Series (napari-cosmos-ts)`. This should bring up a docked widget within the viewer. **Now you are good to go!**
-
-# Update
-1. Activate your virtual environment (see [Install](#install), replace napari-env with the name of your environment). In a command shell or terminal run the following command:
-```shell
-conda activate napari-env
-```
-2. Update `napari-cosmos-ts` in your virtual environment. In a command shell or terminal *where you have activated your virtual environment* run the following command:
-```shell
-pip install napari-cosmos-ts --upgrade
-```
-Or for the latest version of `napari-cosmos-ts`:
-```shell
-pip install napari-cosmos-ts@git+https://github.com/marcel-goldschen-ohm/napari-cosmos-ts --upgrade
-```
-
-# User Guide
-:construction:
+*!!! Remember, every time you open a new command shell or terminal you will need to activate the virtual environment where you installed napari-cosmos-ts before [running the app](#run).*
