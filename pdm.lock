@@ -5,7 +5,7 @@
 groups = ["default", "lint", "test"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.2"
-content_hash = "sha256:ab04b5fd4f4a9d04d07178ae7a65bc71b14b0af9499a488e1e281f0e932a1858"
+content_hash = "sha256:42fff5cb7e1dae59bb2a2d88442ca1d7aeee1b3bd03826818592a96baa9fd835"
 
 [[package]]
 name = "alabaster"
@@ -1937,13 +1937,14 @@ files = [
 
 [[package]]
 name = "pyqt5-qt5"
-version = "5.15.14"
+version = "5.15.2"
 summary = "The subset of a Qt installation needed by PyQt5."
 groups = ["default"]
 files = [
-    {file = "PyQt5_Qt5-5.15.14-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:c89b35b2aaf24d2805cc76fe31880c77b7f7557db8aafb26f1015f1bba7031d6"},
-    {file = "PyQt5_Qt5-5.15.14-py3-none-macosx_11_0_arm64.whl", hash = "sha256:730da7e6a97f6bad1b6df21082fe625647730418bc83e20cbc2ff6401ed0a8be"},
-    {file = "PyQt5_Qt5-5.15.14-py3-none-manylinux2014_x86_64.whl", hash = "sha256:aa3911276b1a1aa9b5b9cba687ef905faddd706980d34e234312591c3d3cbef8"},
+    {file = "PyQt5_Qt5-5.15.2-py3-none-macosx_10_13_intel.whl", hash = "sha256:76980cd3d7ae87e3c7a33bfebfaee84448fd650bad6840471d6cae199b56e154"},
+    {file = "PyQt5_Qt5-5.15.2-py3-none-manylinux2014_x86_64.whl", hash = "sha256:1988f364ec8caf87a6ee5d5a3a5210d57539988bf8e84714c7d60972692e2f4a"},
+    {file = "PyQt5_Qt5-5.15.2-py3-none-win32.whl", hash = "sha256:9cc7a768b1921f4b982ebc00a318ccb38578e44e45316c7a4a850e953e1dd327"},
+    {file = "PyQt5_Qt5-5.15.2-py3-none-win_amd64.whl", hash = "sha256:750b78e4dba6bdf1607febedc08738e318ea09e9b10aea9ff0d73073f11f6962"},
 ]
 
 [[package]]

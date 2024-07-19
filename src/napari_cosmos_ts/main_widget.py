@@ -898,10 +898,12 @@ class MainWidget(QTabWidget):
         moving_image = moving_layer.data
         if fixed_image.ndim > 2:
             ind = self.viewer.dims.current_step[-fixed_image.ndim:-2]
-            fixed_image = fixed_image[*ind,:,:]
+            # fixed_image = fixed_image[*ind,:,:]
+            fixed_image = fixed_image[ind + (slice(None), slice(None))]
         if moving_image.ndim > 2:
             ind = self.viewer.dims.current_step[-moving_image.ndim:-2]
-            moving_image = moving_image[*ind,:,:]
+            # moving_image = moving_image[*ind,:,:]
+            moving_image = moving_image[ind + (slice(None), slice(None))]
 
         # adjust image to match layer contrast limits
         fixed_image = normalize_image(fixed_image, fixed_layer.contrast_limits)
