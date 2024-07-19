@@ -24,6 +24,18 @@ jobs:
       uses: pdm-project/setup-pdm@v4
       with:
         python-version: '3.x'
+    # - name: "Check lock file existence"
+    #   id: check_lock_file_exists
+    #   uses: andstor/file-existence-action@v3
+    #   with:
+    #     files: "pdm.prod.lock"
+    # - name: Generate lock file if not exists
+    #   if: steps.check_lock_file_exists.outputs.files_exists == 'false'
+    #   run: |
+    #     pdm lock -L pdm.prod.lock --prod
+    - name: Install dependencies
+      run: |
+        pdm install --prod --no-editable -L pdm.prod.lock
     - name: Build package
       run: |
         pdm build

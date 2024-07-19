@@ -7,7 +7,7 @@ import pandas as pd
 from napari.viewer import Viewer
 from napari.layers import Layer, Image, Points
 from napari.utils.events import Event
-from qtpy.QtWidgets import QTabWidget
+from qtpy.QtWidgets import QTabWidget, QLayout, QComboBox
 import pyqtgraph as pg
 
 
@@ -2121,7 +2121,7 @@ class MainWidget(QTabWidget):
             self._refresh_combobox(self._coloc_neighbors_layer_combobox, points_layer_names)
             self._refresh_combobox(self._projection_points_layer_combobox, points_layer_names)
     
-    def _refresh_combobox(self, combobox: 'QComboBox', items: list[str]):
+    def _refresh_combobox(self, combobox: QComboBox, items: list[str]):
         """ Reset a combo box with new items.
 
         Keep previous selection if possible.
@@ -2305,9 +2305,7 @@ class MainWidget(QTabWidget):
         return text
 
 
-def clear_layout(layout: 'qtpy.QtWidgets.QLayout'):
-    from qtpy.QtWidgets import QLayout
-
+def clear_layout(layout: QLayout):
     for i in reversed(range(layout.count())):
         item = layout.itemAt(i)
         if isinstance(item, QLayout):
