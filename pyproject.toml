@@ -12,7 +12,7 @@ authors = [
     {name = "Marcel Goldschen-Ohm", email = "goldschen-ohm@utexas.edu"},
 ]
 dependencies = [
-    "napari>=0.4.19.post1",
+    "napari[all]>=0.4.19.post1",
     "pyqtgraph>=0.13.4",
     "pystackreg>=0.2.7",
     "pycpd>=2.0.0",
