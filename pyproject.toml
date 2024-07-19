@@ -55,9 +55,9 @@ napari-cosmos-ts = [
 
 [tool.pdm.dev-dependencies]
 lint = [
-    "flake8",
+    "flake8>=7",
 ]
 test = [
-    "pytest",
-    "pytest-cov",
+    "pytest>=8",
+    "pytest-cov>=5",
 ]
