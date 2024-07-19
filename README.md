@@ -1,6 +1,12 @@
 # napari-cosmos-ts
 [napari](https://napari.org/stable/) plugin for colocalization single-molecule spectroscopy (CoSMoS) time series (TS) analysis.
 
+![GitHub Tag](https://img.shields.io/github/v/tag/marcel-goldschen-ohm/napari-cosmos-ts?cacheSeconds=1)
+![build-test](https://github.com/marcel-goldschen-ohm/napari-cosmos-ts/actions/workflows/build-test.yml/badge.svg)
+
+![GitHub Release](https://img.shields.io/github/v/release/marcel-goldschen-ohm/napari-cosmos-ts?include_prereleases&cacheSeconds=1)
+![publish](https://github.com/marcel-goldschen-ohm/napari-cosmos-ts/actions/workflows/publish.yml/badge.svg)
+
 - [Install](#install)
 - [Run](#run)
 - [Documentation](#documentation)

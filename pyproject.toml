@@ -51,3 +51,13 @@ source = "scm"
 napari-cosmos-ts = [
     "src/napari_cosmos_ts/napari.yaml"
 ]
+
+
+[tool.pdm.dev-dependencies]
+lint = [
+    "flake8",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
