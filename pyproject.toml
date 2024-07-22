@@ -12,8 +12,6 @@ authors = [
     {name = "Marcel Goldschen-Ohm", email = "goldschen-ohm@utexas.edu"},
 ]
 dependencies = [
-    "pyqt5-qt5==5.15.2", # this is because napari[all] requires pyqt5, but some versions (5.15.11) are missing on windows
-    "napari[all]>=0.4.19.post1",
     "pyqtgraph>=0.13.4",
     "pystackreg>=0.2.7",
     "pycpd>=2.0.0",

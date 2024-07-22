@@ -35,7 +35,7 @@ jobs:
     #     pdm lock -L pdm.prod.lock --prod
     - name: Install dependencies
       run: |
-        pdm install --prod --no-editable -L pdm.prod.lock
+        pdm install --prod --no-editable
     - name: Build package
       run: |
         pdm build

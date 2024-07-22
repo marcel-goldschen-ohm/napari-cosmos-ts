@@ -952,7 +952,8 @@ class MainWidget(QTabWidget):
         image = layer.data
         if image.ndim > 2:
             ind = self.viewer.dims.current_step[-image.ndim:-2]
-            image = image[*ind,:,:]
+            # image = image[*ind,:,:]
+            image = image[ind + (slice(None), slice(None))]
         
         points = find_image_peaks(image, min_peak_height, min_peak_separation)
         n_points = len(points)
