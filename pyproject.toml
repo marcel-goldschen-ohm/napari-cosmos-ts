@@ -12,6 +12,9 @@ authors = [
     {name = "Marcel Goldschen-Ohm", email = "goldschen-ohm@utexas.edu"},
 ]
 dependencies = [
+    #"pyqt5-qt5==5.15.2 ; platform_system=='Windows'",
+    #"napari[all]>=0.4.19.post1",
+    "qtpy>=2.4.1",
     "pyqtgraph>=0.13.4",
     "pystackreg>=0.2.7",
     "pycpd>=2.0.0",
