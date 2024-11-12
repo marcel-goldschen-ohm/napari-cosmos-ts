@@ -7,6 +7,7 @@ import pandas as pd
 from napari.viewer import Viewer
 from napari.layers import Layer, Image, Points
 from napari.utils.events import Event
+from napari.utils.transforms import Affine
 from qtpy.QtWidgets import QTabWidget, QLayout, QComboBox
 import pyqtgraph as pg
 
@@ -32,7 +33,7 @@ class MainWidget(QTabWidget):
             symbol = "disc",
             size = [self._init_default_point_size],
             face_color = [[0, 1, 1, 0.1]],
-            edge_color = [[0, 1, 1, 1]],
+            border_color = [[0, 1, 1, 1]],
             opacity = 1,
             blending = "translucent_no_depth",
         )
@@ -137,7 +138,7 @@ class MainWidget(QTabWidget):
                 layer_group.attrs['size'] = layer.size
                 layer_group.attrs['symbol'] = [str(symbol) for symbol in layer.symbol]
                 layer_group.attrs['face_color'] = layer.face_color
-                layer_group.attrs['edge_color'] = layer.edge_color
+                layer_group.attrs['border_color'] = layer.border_color
                 layer_group.attrs['edge_width'] = layer.edge_width
                 layer_group.attrs['edge_width_is_relative'] = layer.edge_width_is_relative
                 if not layer.features.empty:
@@ -260,8 +261,8 @@ class MainWidget(QTabWidget):
                         layer.symbol = layer_group.attrs['symbol']
                     if 'face_color' in layer_group.attrs:
                         layer.face_color = layer_group.attrs['face_color']
-                    if 'edge_color' in layer_group.attrs:
-                        layer.edge_color = layer_group.attrs['edge_color']
+                    if 'border_color' in layer_group.attrs:
+                        layer.border_color = layer_group.attrs['border_color']
                     if 'edge_width' in layer_group.attrs:
                         layer.edge_width = layer_group.attrs['edge_width']
                     if 'edge_width_is_relative' in layer_group.attrs:
@@ -378,8 +379,8 @@ class MainWidget(QTabWidget):
         #                     layer.symbol = layer_data['symbol']
         #                 if 'face_color' in layer_data:
         #                     layer.face_color = layer_data['face_color']
-        #                 if 'edge_color' in layer_data:
-        #                     layer.edge_color = layer_data['edge_color']
+        #                 if 'border_color' in layer_data:
+        #                     layer.border_color = layer_data['border_color']
         #                 if 'edge_width' in layer_data:
         #                     layer.edge_width = layer_data['edge_width']
         #                 if 'edge_width_is_relative' in layer_data:
@@ -497,7 +498,7 @@ class MainWidget(QTabWidget):
                 layer_data['size'] = layer.size
                 layer_data['symbol'] = [str(symbol) for symbol in layer.symbol]
                 layer_data['face_color'] = layer.face_color
-                layer_data['edge_color'] = layer.edge_color
+                layer_data['border_color'] = layer.border_color
                 layer_data['edge_width'] = layer.edge_width
                 layer_data['edge_width_is_relative'] = layer.edge_width_is_relative
 
@@ -614,8 +615,8 @@ class MainWidget(QTabWidget):
                             layer.symbol = layer_data['symbol']
                         if 'face_color' in layer_data:
                             layer.face_color = layer_data['face_color']
-                        if 'edge_color' in layer_data:
-                            layer.edge_color = layer_data['edge_color']
+                        if 'border_color' in layer_data:
+                            layer.border_color = layer_data['border_color']
                         if 'edge_width' in layer_data:
                             layer.edge_width = layer_data['edge_width']
                         if 'edge_width_is_relative' in layer_data:
@@ -965,7 +966,7 @@ class MainWidget(QTabWidget):
             symbol = "disc",
             size = [self._default_point_size_spinbox.value()] * n_points,
             face_color = [[1, 1, 0, 0.1]] * n_points,
-            edge_color = [[1, 1, 0, 1]] * n_points,
+            border_color = [[1, 1, 0, 1]] * n_points,
             opacity = 1,
             blending = "translucent_no_depth",
         )
@@ -1008,7 +1009,7 @@ class MainWidget(QTabWidget):
             symbol = "disc",
             size = [self._default_point_size_spinbox.value()] * n_points,
             face_color = [[1, 0, 1, 0.1]] * n_points,
-            edge_color = [[1, 0, 1, 1]] * n_points,
+            border_color = [[1, 0, 1, 1]] * n_points,
             opacity = 1,
             blending = "translucent_no_depth",
         )
@@ -1049,7 +1050,7 @@ class MainWidget(QTabWidget):
                 symbol = "disc",
                 size = [point_size],
                 face_color = [[0, 1, 1, 0.1]],
-                edge_color = [[0, 1, 1, 1]],
+                border_color = [[0, 1, 1, 1]],
                 opacity = 1,
                 blending = "translucent_no_depth",
             )
@@ -1618,7 +1619,12 @@ class MainWidget(QTabWidget):
         """ Set the layer transform to the copied transform.
         """
         if hasattr(self, '_copied_layer_transform'):
-            layer.affine = self._copied_layer_transform
+            from_ndim = self._copied_layer_transform.ndim
+            to_ndim = layer.ndim
+            mat = np.eye(to_ndim + 1)
+            sz = 1 + min(from_ndim, to_ndim)
+            mat[-sz:, -sz:] = self._copied_layer_transform.affine_matrix[-sz:, -sz:]
+            layer.affine = Affine(affine_matrix=mat)
     
     def _clear_layer_transform(self, layer: Layer):
         """ Clear the layer transform.
@@ -2523,6 +2529,7 @@ if __name__ == "__main__":
     Typically, the plugin is run from the plugin menu in the napari viewer.
     """
     import napari
+    import dask.array as da
 
     viewer = Viewer()
     plugin = MainWidget(viewer)
@@ -2531,16 +2538,19 @@ if __name__ == "__main__":
     viewer.add_image(
         np.random.random([1000, 512, 512]),
         contrast_limits=[0.8, 1],
+        name="1000x512x512",
     )
 
     viewer.add_image(
-        np.random.random([1000, 512, 512]),
+        da.from_array(np.random.random([3000, 512, 512]), chunks=(1000, 512, 512)),
         contrast_limits=[0.8, 1],
+        name="3000x512x512 Dask",
     )
 
     viewer.add_image(
         np.random.random([512, 512]),
         contrast_limits=[0.8, 1],
+        name="512x512",
     )
 
     n_points = 100
@@ -2549,9 +2559,10 @@ if __name__ == "__main__":
         symbol = "disc",
         size = [8] * n_points,
         face_color = [[1, 1, 0, 0.1]] * n_points,
-        edge_color = [[1, 1, 0, 1]] * n_points,
+        border_color = [[1, 1, 0, 1]] * n_points,
         opacity = 1,
         blending = "translucent_no_depth",
+        name="100 points",
     )
 
     n_points = 50
@@ -2560,9 +2571,10 @@ if __name__ == "__main__":
         symbol = "disc",
         size = [8] * n_points,
         face_color = [[1, 1, 0, 0.1]] * n_points,
-        edge_color = [[1, 1, 0, 1]] * n_points,
+        border_color = [[1, 1, 0, 1]] * n_points,
         opacity = 1,
         blending = "translucent_no_depth",
+        name="50 points",
     )
 
     napari.run()
