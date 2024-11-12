@@ -1341,7 +1341,7 @@ class MainWidget(QTabWidget):
             plot.setLabels(left=layer.name)
                 
             # xlink point projection plots
-            other_plots = [meta['point_projection_plot'] for meta in self._layer_metadata if 'point_projection_plot' in metadata]
+            other_plots = [meta['point_projection_plot'] for meta in self._layer_metadata if 'point_projection_plot' in meta]
             if other_plots:
                 plot.setXLink(other_plots[0])
             
