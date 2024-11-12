@@ -3,6 +3,7 @@
 
 import os
 import numpy as np
+import dask.array as da
 import pandas as pd
 from napari.viewer import Viewer
 from napari.layers import Layer, Image, Points
@@ -2482,7 +2483,7 @@ def find_colocalized_points(points: np.ndarray, neighbors: np.ndarray, nearest_n
     return colocalized_points
 
 
-def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = None) -> np.ndarray:
+def project_image_point(image: np.ndarray | da.Array, point2d, point_mask2d: np.ndarray = None) -> np.ndarray:
     """ Return the point projection for the input image.
 
     If a mask is given, the projection is the per-frame mean of the pixels in the mask scaled by the mask.
@@ -2490,8 +2491,12 @@ def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = N
     # project single pixel
     if (point_mask2d is None) or np.all(point_mask2d.shape == 1):
         row, col = np.round(point2d).astype(int).flatten()
+        indices = (slice(None),) * (image.ndim - 2) + (row, col)
         try:
-            return np.squeeze(image[...,row,col])
+            if isinstance(image, np.ndarray):
+                return np.squeeze(image[indices])
+            elif isinstance(image, da.Array):
+                return da.squeeze(image[indices]).compute()
         except IndexError:
             return np.array([])
     
@@ -2508,7 +2513,11 @@ def project_image_point(image: np.ndarray, point2d, point_mask2d: np.ndarray = N
     cols = cols[j].reshape([1,-1])
     mask = point_mask2d[i.reshape([-1,1]),j.reshape([1,-1])]
     mask = mask.reshape((1,) * (image.ndim - 2) + mask.shape)
-    return np.squeeze(np.mean(image[...,rows,cols] * mask, axis=(-2, -1)))
+    indices = (slice(None),) * (image.ndim - 2) + (slice(rows[0,0], rows[-1,-1] + 1), slice(cols[0,0], cols[-1,-1] + 1))
+    if isinstance(image, np.ndarray):
+        return np.squeeze(np.mean(image[indices] * mask, axis=(-2, -1)))
+    elif isinstance(image, da.Array):
+        return da.squeeze(da.mean(image[indices] * mask, axis=(-2, -1))).compute()
 
 
 def make_point_mask(size: int | float, type: str = 'circle'):
@@ -2529,7 +2538,6 @@ if __name__ == "__main__":
     Typically, the plugin is run from the plugin menu in the napari viewer.
     """
     import napari
-    import dask.array as da
 
     viewer = Viewer()
     plugin = MainWidget(viewer)
