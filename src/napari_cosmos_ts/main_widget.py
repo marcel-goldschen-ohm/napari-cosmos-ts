@@ -447,6 +447,9 @@ class MainWidget(QTabWidget):
             if filepath == "":
                 return
         
+        if not filepath.endswith(".mat"):
+            filepath += ".mat"
+        
         session_abspath = os.path.abspath(filepath)
         session_absdir, session_file = os.path.split(session_abspath)
 
