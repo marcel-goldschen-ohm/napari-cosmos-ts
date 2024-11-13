@@ -39,6 +39,9 @@ class MainWidget(QTabWidget):
             blending = "translucent_no_depth",
         )
 
+        # link point projection plot x-axes?
+        self._point_projection_plots_xlink = True
+
         # UI
         self._setup_ui()
 
@@ -1345,9 +1348,10 @@ class MainWidget(QTabWidget):
             plot.setLabels(left=layer.name)
                 
             # xlink point projection plots
-            other_plots = [meta['point_projection_plot'] for meta in self._layer_metadata if 'point_projection_plot' in meta]
-            if other_plots:
-                plot.setXLink(other_plots[0])
+            if self._point_projection_plots_xlink:
+                other_plots = [meta['point_projection_plot'] for meta in self._layer_metadata if 'point_projection_plot' in meta]
+                if other_plots:
+                    plot.setXLink(other_plots[0])
             
             # position plot to match layer order
             plot_index = self._imagestack_layers().index(layer)
@@ -1590,6 +1594,15 @@ class MainWidget(QTabWidget):
         # viewer.reset_view()
         pass
 
+    def set_point_projection_plots_xlink(self, xlink: bool):
+        self._point_projection_plots_xlink = xlink
+        plots = [meta['point_projection_plot'] for meta in self._layer_metadata if 'point_projection_plot' in meta]
+        for i, plot in enumerate(plots):
+            if i == 0 or not xlink:
+                plot.setXLink(None)
+            else:
+                plot.setXLink(plots[0])
+    
     def _apply_to_all_layers(self, func, *args, **kwargs):
         """ Apply a function to all layers.
 
@@ -1936,12 +1949,12 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
         self._projection_settings_button = QToolButton()
-        self._projection_settings_button.setIcon(qta.icon("fa.cog"))
+        self._projection_settings_button.setIcon(qta.icon("fa.cog", color='white'))
         self._projection_settings_button.setToolTip("Point projection options.")
         self._projection_settings_button.pressed.connect(self._edit_projection_settings)
 
         self._store_projections_button = QToolButton()
-        self._store_projections_button.setIcon(qta.icon("mdi.database-arrow-up"))
+        self._store_projections_button.setIcon(qta.icon("mdi.database-arrow-up", color='white'))
         self._store_projections_button.setToolTip("Store all point projections in image layer metadata.")
         self._store_projections_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
 
@@ -2240,11 +2253,16 @@ class MainWidget(QTabWidget):
             self.select_projection_point()
     
     def _edit_projection_settings(self):
-        from qtpy.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QFormLayout, QDialogButtonBox, QSpinBox
+        from qtpy.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QFormLayout, QDialogButtonBox, QSpinBox, QCheckBox
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Point Projection Settings")
         vbox = QVBoxLayout(dlg)
+
+        xlink_checkbox = QCheckBox("Link X-axes")
+        xlink_checkbox.setChecked(self._point_projection_plots_xlink)
+        xlink_checkbox.stateChanged.connect(lambda state: self.set_point_projection_plots_xlink(state == 2))
+        vbox.addWidget(xlink_checkbox)
 
         group = QGroupBox("Sum Frames")
         form = QFormLayout(group)
