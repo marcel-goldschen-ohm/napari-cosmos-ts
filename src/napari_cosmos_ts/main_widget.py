@@ -61,28 +61,32 @@ class MainWidget(QTabWidget):
         """
         if filepath is None:
             from qtpy.QtWidgets import QFileDialog
-            filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "HDF5 or MATLAB (*.hdf5 *.h5 *.mat)")
+            # filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "HDF5 or MATLAB (*.hdf5 *.h5 *.mat)")
+            filepath, _filter = QFileDialog.getSaveFileName(self, "Save session", "", "MATLAB (*.mat)")
             if filepath == "":
                 return
         
-        if filepath.endswith(".mat"):
-            self.export_mat_session(filepath)
-        else:
-            self.export_hdf5_session(filepath)
+        # if filepath.endswith(".mat"):
+        #     self.export_mat_session(filepath)
+        # else:
+        #     self.export_hdf5_session(filepath)
+        self.export_mat_session(filepath)
     
     def import_session(self, filepath: str = None):
         """ Import data from file.
         """
         if filepath is None:
             from qtpy.QtWidgets import QFileDialog
-            filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "HDF5 or MATLAB (*.hdf5 *.h5 *.mat)")
+            # filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "HDF5 or MATLAB (*.hdf5 *.h5 *.mat)")
+            filepath, _filter = QFileDialog.getOpenFileName(self, "Open session", "", "MATLAB (*.mat)")
             if filepath == "":
                 return
         
-        if filepath.endswith(".mat"):
-            self.import_mat_session(filepath)
-        else:
-            self.import_hdf5_session(filepath)
+        # if filepath.endswith(".mat"):
+        #     self.import_mat_session(filepath)
+        # else:
+        #     self.import_hdf5_session(filepath)
+        self.import_mat_session(filepath)
     
     def export_hdf5_session(self, filepath: str = None):
         """ Export data to an HDF5 file.
@@ -1709,10 +1713,10 @@ class MainWidget(QTabWidget):
         msg = QLabel("!!! Sessions store the relative path to each image file, NOT the data itself. It is up to you to maintain this file structure.\nSession HDF5 files can be accessed in MATLAB (e.g., see load_napari_cosmos_ts_session.m in this repo).")
         msg.setWordWrap(True)
 
-        self._open_session_button = QPushButton("Open session as HDF5 or MATLAB file")
+        self._open_session_button = QPushButton("Open session from file")#("Open session as HDF5 or MATLAB file")
         self._open_session_button.pressed.connect(self.import_session)
 
-        self._save_session_button = QPushButton("Save session as HDF5 or MATLAB file")
+        self._save_session_button = QPushButton("Save session to file")#("Save session as HDF5 or MATLAB file")
         self._save_session_button.pressed.connect(self.export_session)
 
         self._project_all_points_button = QPushButton("Project all points for all image stacks")
