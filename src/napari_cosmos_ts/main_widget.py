@@ -891,19 +891,17 @@ class MainWidget(QTabWidget):
 
     def register_image_layers(self, fixed_layer: Image, moving_layer: Image, transform_type: str = "affine"):
         """ Set transformation of moving layer to align moving image to fixed image.
-
-        Uses pystackreg for image registration.
         """
-        try:
-            from pystackreg import StackReg
-        except ImportError:
-            from qtpy.QtWidgets import QMessageBox
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Warning)
-            msg.setText("Image registration requires pystackreg package.")
-            msg.setStandardButtons(QMessageBox.Close)
-            msg.exec()
-            return
+        # try:
+        #     from pystackreg import StackReg
+        # except ImportError:
+        #     from qtpy.QtWidgets import QMessageBox
+        #     msg = QMessageBox(self)
+        #     msg.setIcon(QMessageBox.Warning)
+        #     msg.setText("Image registration requires pystackreg package.")
+        #     msg.setStandardButtons(QMessageBox.Close)
+        #     msg.exec()
+        #     return
         
         # get current image or frame if layer is an image stack
         fixed_image = fixed_layer.data
@@ -2427,20 +2425,134 @@ def normalize_image(image: np.ndarray, limits: tuple[float] = None) -> np.ndarra
 
 def register_images(fixed_image: np.ndarray, moving_image: np.ndarray, transform_type: str = "affine") -> np.ndarray:
     """ Return transformation that aligns moving image to fixed image.
-
-    Uses pystackreg for image registration.
     """
-    from pystackreg import StackReg
+    if transform_type == "translation":
+        # phase cross-correlation is good for small translations (and very fast)
+        from skimage.registration import phase_cross_correlation
+        shift, error, phase_diff = phase_cross_correlation(fixed_image, moving_image, upsample_factor=10, overlap_ratio=0.9)
+        tform = np.eye(3)
+        tform[:2,-1] = shift
+        return tform
 
-    transform_types = {
-        "translation": StackReg.TRANSLATION,
-        "rigid body": StackReg.RIGID_BODY,
-        "affine": StackReg.AFFINE,
-    }
-    type = transform_types[transform_type]
-    sreg = StackReg(type)
-    tform = sreg.register(fixed_image, moving_image)
-    return tform
+    from dipy.align.imaffine import AffineRegistration, MutualInformationMetric
+    affreg = AffineRegistration(
+        metric=MutualInformationMetric(nbins=32, sampling_proportion=1),
+        level_iters=[10000, 1000, 100],
+        sigmas=[3.0, 1.0, 0.0],
+        factors=[4, 2, 1],
+    )
+
+    from dipy.align.transforms import TranslationTransform2D
+    params0 = None
+    translation = affreg.optimize(moving_image, fixed_image, TranslationTransform2D(), params0)
+    if transform_type == "translation":
+        return translation.affine
+
+    from dipy.align.transforms import RigidTransform2D
+    rigid = affreg.optimize(moving_image, fixed_image, RigidTransform2D(), params0, starting_affine=translation.affine)
+    if transform_type == "rigid body":
+        return rigid.affine
+
+    from dipy.align.transforms import AffineTransform2D
+    affine = affreg.optimize(moving_image, fixed_image, AffineTransform2D(), params0, starting_affine=rigid.affine)
+    if transform_type == "affine":
+        return affine.affine
+
+    # elif transform_type == "rigid body":
+    #     transform = RigidTransform3D()
+    #     rigid = affreg.optimize(template_data, moving_data, transform, params0, template_affine, moving_affine, starting_affine=translation.affine)
+
+    #     from dipy.align.transforms import RigidTransform2D
+    #     from dipy.align.imaffine import AffineRegistration
+    #     affreg = AffineRegistration()
+    #     transform = AffineTransform2D()
+    #     affine = affreg.optimize(moving_image, fixed_image, transform, params0=None)
+    #     return affine.affine
+    # elif transform_type == "affine":
+    #     from dipy.align.transforms import AffineTransform2D
+    #     from dipy.align.imaffine import AffineRegistration
+    #     affreg = AffineRegistration()
+    #     transform = AffineTransform2D()
+    #     affine = affreg.optimize(moving_image, fixed_image, transform, params0=None)
+    #     return affine.affine
+
+    # import SimpleITK as sitk
+    # fixed_image = sitk.GetImageFromArray(fixed_image)
+    # moving_image = sitk.GetImageFromArray(moving_image)
+    # if transform_type == "translation":
+    #     initial_transform = sitk.TranslationTransform(2)
+    # elif transform_type == "rigid body":
+    #     initial_transform = sitk.CenteredTransformInitializer(
+    #         fixed_image,
+    #         moving_image,
+    #         sitk.Euler2DTransform(),
+    #         sitk.CenteredTransformInitializerFilter.GEOMETRY,
+    #     )
+    #     initial_transform = sitk.Euler2DTransform()
+    # elif transform_type == "affine":
+    #     initial_transform = sitk.CenteredTransformInitializer(
+    #         fixed_image,
+    #         moving_image,
+    #         sitk.AffineTransform(2),
+    #         sitk.CenteredTransformInitializerFilter.GEOMETRY,
+    #     )
+    #     initial_transform = sitk.AffineTransform(2)
+    # registration_method = sitk.ImageRegistrationMethod()
+
+    # # registration_method.SetMetricAsMeanSquares()
+    # # registration_method.SetMetricAsCorrelation()
+    # registration_method.SetMetricAsANTSNeighborhoodCorrelation(radius=5)
+    # # registration_method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+    
+    # registration_method.SetMetricSamplingStrategy(registration_method.NONE)
+    # # registration_method.SetMetricSamplingPercentage(0.01)
+
+    # registration_method.SetInterpolator(sitk.sitkLinear)
+    
+    # # registration_method.SetOptimizerAsAmoeba(
+    # #     simplexDelta=0.1,
+    # #     numberOfIterations=1000,
+    # #     withRestarts=True,
+    # # )
+    # registration_method.SetOptimizerAsGradientDescent(
+    #     learningRate=1,
+    #     numberOfIterations=1000,
+    #     convergenceMinimumValue=1e-18,
+    #     convergenceWindowSize=100,
+    #     # estimateLearningRate=registration_method.EachIteration,
+    # )
+    # # registration_method.SetOptimizerAsGradientDescentLineSearch(
+    # #     learningRate=1.0,
+    # #     numberOfIterations=100,
+    # #     convergenceMinimumValue=1e-6,
+    # #     convergenceWindowSize=10,
+    # # )
+
+    # registration_method.SetInitialTransform(initial_transform)
+    # final_transform = registration_method.Execute(fixed_image, moving_image)#.GetInverse()
+    # print(f"Optimizer stop condition: {registration_method.GetOptimizerStopConditionDescription()}")
+    # tform = np.eye(3)
+    # if transform_type == "translation":
+    #     translation = np.array(final_transform.GetOffset()).flatten()
+    #     tform[:2,-1] = translation
+    # else:
+    #     rotation = np.array(final_transform.GetMatrix()).reshape([2,2])
+    #     translation = np.array(final_transform.GetTranslation()).flatten()
+    #     tform[:2,:2] = rotation
+    #     tform[:2,-1] = translation
+    # return tform
+
+    # from pystackreg import StackReg
+    # transform_types = {
+    #     "translation": StackReg.TRANSLATION,
+    #     "rigid body": StackReg.RIGID_BODY,
+    #     "affine": StackReg.AFFINE,
+    # }
+    # type = transform_types[transform_type]
+    # sreg = StackReg(type)
+    # tform = sreg.register(fixed_image, moving_image)
+    # print(tform)
+    # return tform
 
 
 def register_points(fixed_points: np.ndarray, moving_points: np.ndarray, transform_type: str = "affine") -> np.ndarray:
@@ -2568,46 +2680,49 @@ if __name__ == "__main__":
     plugin = MainWidget(viewer)
     viewer.window.add_dock_widget(plugin, name='napari-cosmos-ts', area='right')
 
-    viewer.add_image(
-        np.random.random([1000, 512, 512]),
-        contrast_limits=[0.8, 1],
-        name="1000x512x512",
-    )
-
-    viewer.add_image(
-        da.from_array(np.random.random([3000, 512, 512]), chunks=(1000, 512, 512)),
-        contrast_limits=[0.8, 1],
-        name="3000x512x512 Dask",
-    )
-
-    viewer.add_image(
-        np.random.random([512, 512]),
-        contrast_limits=[0.8, 1],
-        name="512x512",
-    )
-
-    n_points = 100
-    viewer.add_points(
-        np.random.random([n_points, 2]) * 512,
-        symbol = "disc",
-        size = [8] * n_points,
-        face_color = [[1, 1, 0, 0.1]] * n_points,
-        border_color = [[1, 1, 0, 1]] * n_points,
-        opacity = 1,
-        blending = "translucent_no_depth",
-        name="100 points",
-    )
-
-    n_points = 50
-    viewer.add_points(
-        np.random.random([n_points, 2]) * 512,
-        symbol = "disc",
-        size = [8] * n_points,
-        face_color = [[1, 1, 0, 0.1]] * n_points,
-        border_color = [[1, 1, 0, 1]] * n_points,
-        opacity = 1,
-        blending = "translucent_no_depth",
-        name="50 points",
-    )
-
+    plugin.import_session("/Users/marcel/Downloads/image_reg_test.mat")
     napari.run()
+
+    # viewer.add_image(
+    #     np.random.random([1000, 512, 512]),
+    #     contrast_limits=[0.8, 1],
+    #     name="1000x512x512",
+    # )
+
+    # viewer.add_image(
+    #     da.from_array(np.random.random([3000, 512, 512]), chunks=(1000, 512, 512)),
+    #     contrast_limits=[0.8, 1],
+    #     name="3000x512x512 Dask",
+    # )
+
+    # viewer.add_image(
+    #     np.random.random([512, 512]),
+    #     contrast_limits=[0.8, 1],
+    #     name="512x512",
+    # )
+
+    # n_points = 100
+    # viewer.add_points(
+    #     np.random.random([n_points, 2]) * 512,
+    #     symbol = "disc",
+    #     size = [8] * n_points,
+    #     face_color = [[1, 1, 0, 0.1]] * n_points,
+    #     border_color = [[1, 1, 0, 1]] * n_points,
+    #     opacity = 1,
+    #     blending = "translucent_no_depth",
+    #     name="100 points",
+    # )
+
+    # n_points = 50
+    # viewer.add_points(
+    #     np.random.random([n_points, 2]) * 512,
+    #     symbol = "disc",
+    #     size = [8] * n_points,
+    #     face_color = [[1, 1, 0, 0.1]] * n_points,
+    #     border_color = [[1, 1, 0, 1]] * n_points,
+    #     opacity = 1,
+    #     blending = "translucent_no_depth",
+    #     name="50 points",
+    # )
+
+    # napari.run()
