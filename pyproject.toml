@@ -14,7 +14,7 @@ authors = [
 dependencies = [
     #"pyqt5-qt5==5.15.2 ; platform_system=='Windows'",
     #"napari[all]>=0.4.19.post1",
-    "numpy>=2.0,<2.1", # for numba compatibility
+    "numpy<2", # for numba and dipy compatibility
     "qtpy>=2.4.1",
     "pyqtgraph>=0.13.4",
     "scikit-image>=0.24.0",
