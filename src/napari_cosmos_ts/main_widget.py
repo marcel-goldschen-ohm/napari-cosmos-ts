@@ -147,8 +147,8 @@ class MainWidget(QTabWidget):
                 layer_group.attrs['symbol'] = [str(symbol) for symbol in layer.symbol]
                 layer_group.attrs['face_color'] = layer.face_color
                 layer_group.attrs['border_color'] = layer.border_color
-                layer_group.attrs['edge_width'] = layer.edge_width
-                layer_group.attrs['edge_width_is_relative'] = layer.edge_width_is_relative
+                layer_group.attrs['border_width'] = layer.border_width
+                layer_group.attrs['border_width_is_relative'] = layer.border_width_is_relative
                 if not layer.features.empty:
                     features_group = layer_group.create_group('Features')
                     for key in layer.features:
@@ -271,10 +271,10 @@ class MainWidget(QTabWidget):
                         layer.face_color = layer_group.attrs['face_color']
                     if 'border_color' in layer_group.attrs:
                         layer.border_color = layer_group.attrs['border_color']
-                    if 'edge_width' in layer_group.attrs:
-                        layer.edge_width = layer_group.attrs['edge_width']
-                    if 'edge_width_is_relative' in layer_group.attrs:
-                        layer.edge_width_is_relative = layer_group.attrs['edge_width_is_relative']
+                    if 'border_width' in layer_group.attrs:
+                        layer.border_width = layer_group.attrs['border_width']
+                    if 'border_width_is_relative' in layer_group.attrs:
+                        layer.border_width_is_relative = layer_group.attrs['border_width_is_relative']
                     
                     n_points = len(layer.data)
                     features = pd.DataFrame({"tags": [""] * n_points})
@@ -389,10 +389,10 @@ class MainWidget(QTabWidget):
         #                     layer.face_color = layer_data['face_color']
         #                 if 'border_color' in layer_data:
         #                     layer.border_color = layer_data['border_color']
-        #                 if 'edge_width' in layer_data:
-        #                     layer.edge_width = layer_data['edge_width']
-        #                 if 'edge_width_is_relative' in layer_data:
-        #                     layer.edge_width_is_relative = layer_data['edge_width_is_relative']
+        #                 if 'border_width' in layer_data:
+        #                     layer.border_width = layer_data['border_width']
+        #                 if 'border_width_is_relative' in layer_data:
+        #                     layer.border_width_is_relative = layer_data['border_width_is_relative']
                         
         #                 n_points = len(layer.data)
         #                 features = pd.DataFrame({"tags": [""] * n_points})
@@ -439,6 +439,7 @@ class MainWidget(QTabWidget):
     def export_mat_session(self, filepath: str = None):
         """ Export data to MATLAB .mat file.
         """
+        # import hdf5storage
         from scipy.io import savemat
 
         if filepath is None:
@@ -459,20 +460,20 @@ class MainWidget(QTabWidget):
         progress = QProgressDialog("Exporting session...", None, 0, 2, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
-        
-        # session dict
-        session = {}
-        session['date'] = self._date_edit.text() + " "
-        session['ID'] = self._id_edit.text() + " "
-        session['users'] = self._users_edit.text() + " "
-        session['notes'] = self._notes_edit.toPlainText() + " "
-        session['default_point_size'] = self._default_point_size_spinbox.value()
 
         # ensure points layer names can be used as fieldnames in a MATLAB struct
         for layer in self._points_layers():
             fieldname = self._get_valid_struct_fieldname(layer.name)
             if fieldname != layer.name:
                 layer.name = fieldname
+        
+        # session dict
+        session = {}
+        session['date'] = self._date_edit.text()
+        session['ID'] = self._id_edit.text()
+        session['users'] = self._users_edit.text()
+        session['notes'] = self._notes_edit.toPlainText()
+        session['default_point_size'] = self._default_point_size_spinbox.value()
         
         # layer dicts
         session['layers'] = []
@@ -491,13 +492,12 @@ class MainWidget(QTabWidget):
                     image_relpath = os.path.relpath(image_abspath, start=session_absdir)
                     layer_data['abspath'] = image_abspath
                     layer_data['relpath'] = image_relpath
-                if image_abspath is None:
-                    # store image data if it does not already exist on disk
+                if image_abspath is None and isinstance(layer.data, np.ndarray) and layer.data.size <= np.iinfo(np.uint32).max:
+                    # store image data if it does not already exist on disk (and is small enough to store in .mat file)
                     layer_data['data'] = layer.data
-                if 'data' not in layer_data:
-                    # if image data is not stored in the session, store shape and dtype
-                    layer_data['data_shape'] = layer.data.shape
-                    layer_data['data_dtype'] = str(layer.data.dtype)
+                # in case image data is not stored in the session, always store shape and dtype
+                layer_data['data_shape'] = layer.data.shape
+                layer_data['data_dtype'] = str(layer.data.dtype)
                 layer_data['contrast_limits'] = layer.contrast_limits
                 layer_data['gamma'] = layer.gamma
                 layer_data['colormap'] = layer.colormap.name
@@ -510,8 +510,8 @@ class MainWidget(QTabWidget):
                 layer_data['symbol'] = [str(symbol) for symbol in layer.symbol]
                 layer_data['face_color'] = layer.face_color
                 layer_data['border_color'] = layer.border_color
-                layer_data['edge_width'] = layer.edge_width
-                layer_data['edge_width_is_relative'] = layer.edge_width_is_relative
+                layer_data['border_width'] = layer.border_width
+                layer_data['border_width_is_relative'] = layer.border_width_is_relative
 
                 if not layer.features.empty:
                     layer_data['features'] = {}
@@ -533,7 +533,8 @@ class MainWidget(QTabWidget):
         QApplication.processEvents()
         import time
         tic = time.time()
-        savemat(filepath, session)
+        savemat(filepath, session, long_field_names=True)
+        # hdf5storage.write(data=session, path=session_absdir, filename=session_file, store_python_metadata=True, matlab_compatible=True)
         toc = time.time()
         print(f"savemat took {toc - tic:.2f} seconds.")
 
@@ -628,10 +629,10 @@ class MainWidget(QTabWidget):
                             layer.face_color = layer_data['face_color']
                         if 'border_color' in layer_data:
                             layer.border_color = layer_data['border_color']
-                        if 'edge_width' in layer_data:
-                            layer.edge_width = layer_data['edge_width']
-                        if 'edge_width_is_relative' in layer_data:
-                            layer.edge_width_is_relative = layer_data['edge_width_is_relative']
+                        if 'border_width' in layer_data:
+                            layer.border_width = layer_data['border_width']
+                        if 'border_width_is_relative' in layer_data:
+                            layer.border_width_is_relative = layer_data['border_width_is_relative']
                         
                         n_points = len(layer.data)
                         features = pd.DataFrame({"tags": [""] * n_points})
@@ -674,7 +675,9 @@ class MainWidget(QTabWidget):
         progress.close()
     
     def export_point_projections(self, dirpath: str = None):
-        """ Export point projections to CSV file.
+        """ Export point projections to CSV files
+
+        One file per unique imagestack and points layer combo.
         """
         if dirpath is None:
             from qtpy.QtWidgets import QFileDialog
@@ -892,17 +895,6 @@ class MainWidget(QTabWidget):
     def register_image_layers(self, fixed_layer: Image, moving_layer: Image, transform_type: str = "affine"):
         """ Set transformation of moving layer to align moving image to fixed image.
         """
-        # try:
-        #     from pystackreg import StackReg
-        # except ImportError:
-        #     from qtpy.QtWidgets import QMessageBox
-        #     msg = QMessageBox(self)
-        #     msg.setIcon(QMessageBox.Warning)
-        #     msg.setText("Image registration requires pystackreg package.")
-        #     msg.setStandardButtons(QMessageBox.Close)
-        #     msg.exec()
-        #     return
-        
         # get current image or frame if layer is an image stack
         fixed_image = fixed_layer.data
         moving_image = moving_layer.data
@@ -1734,7 +1726,7 @@ class MainWidget(QTabWidget):
         self._save_session_button.pressed.connect(self.export_session)
 
         self._project_all_points_button = QPushButton("Project all points for all image stacks")
-        self._project_all_points_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
+        self._project_all_points_button.pressed.connect(self._compute_and_store_all_point_projections_in_image_layer_metadata)
 
         self._export_point_projections_button = QPushButton("Export point projections as .csv file")
         self._export_point_projections_button.pressed.connect(self.export_point_projections)
@@ -1870,7 +1862,7 @@ class MainWidget(QTabWidget):
         Includes point settings, colocalization, and point projection.
         """
         from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit, QToolButton
+        from qtpy.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget, QFormLayout, QGroupBox, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox, QTabWidget, QGridLayout, QLabel, QCheckBox, QLineEdit, QToolButton, QMenu
         import qtawesome as qta
 
         self._default_point_size_spinbox = QDoubleSpinBox()
@@ -1949,15 +1941,29 @@ class MainWidget(QTabWidget):
         self._tag_filter_edit = QLineEdit()
         self._tag_filter_edit.editingFinished.connect(self._update_tag_filter)
 
-        self._projection_settings_button = QToolButton()
-        self._projection_settings_button.setIcon(qta.icon("fa.cog", color='white'))
-        self._projection_settings_button.setToolTip("Point projection options.")
-        self._projection_settings_button.pressed.connect(self._edit_projection_settings)
+        # self._point_projection_settings_button = QToolButton()
+        # self._point_projection_settings_button.setIcon(qta.icon("fa.cog", color='white'))
+        # self._point_projection_settings_button.setToolTip("Point projection options")
+        # self._point_projection_settings_button.pressed.connect(self._edit_point_projection_settings)
 
-        self._store_projections_button = QToolButton()
-        self._store_projections_button.setIcon(qta.icon("mdi.database-arrow-up", color='white'))
-        self._store_projections_button.setToolTip("Store all point projections in image layer metadata.")
-        self._store_projections_button.pressed.connect(self._store_all_point_projections_in_image_layer_metadata)
+        # self._store_projections_button = QToolButton()
+        # self._store_projections_button.setIcon(qta.icon("mdi.database-arrow-up", color='white'))
+        # self._store_projections_button.setToolTip("Store all point projections in image layer metadata.")
+        # self._store_projections_button.pressed.connect(self._compute_and_store_all_point_projections_in_image_layer_metadata)
+
+        self._point_projection_menu = QMenu()
+        self._point_projection_menu.addAction("Point projection settings", self._edit_point_projection_settings)
+        self._point_projection_menu.addSeparator()
+        self._point_projection_menu.addAction("Project all points for all layers", self._compute_and_store_all_point_projections_in_image_layer_metadata)
+        self._point_projection_menu.addSeparator()
+        self._point_projection_menu.addAction("Copy filtered points to new layer", self._copy_filtered_points_to_new_layer)
+
+        self._point_projection_menu_button = QToolButton()
+        self._point_projection_menu_button.setIcon(qta.icon("mdi.menu", color='white'))
+        self._point_projection_menu_button.setToolTip("Point projections menu")
+        self._point_projection_menu_button.setPopupMode(QToolButton.InstantPopup)
+        self._point_projection_menu_button.setMenu(self._point_projection_menu)
+        self._point_projection_menu_button.setStyleSheet("QToolButton::menu-indicator { image: none; }")
 
         tab = QTabWidget()
         for tab_title in ["Point", "Find", "Colocalize", "Projection"]:
@@ -2026,13 +2032,13 @@ class MainWidget(QTabWidget):
                 grid.addWidget(self._n_projection_points_label, 0, 2)
                 grid.addWidget(self._tag_filter_checkbox, 0, 3)
                 grid.addWidget(self._tag_filter_edit, 0, 4)
-                grid.addWidget(self._projection_settings_button, 0, 5)
+                grid.addWidget(self._point_projection_menu_button, 0, 5)
                 grid.addWidget(index_label, 1, 0)
                 grid.addWidget(self._projection_point_index_spinbox, 1, 1)
                 grid.addWidget(self._projection_point_world_label, 1, 2)
                 grid.addWidget(tag_label, 1, 3)
                 grid.addWidget(self._tag_edit, 1, 4)
-                grid.addWidget(self._store_projections_button, 1, 5)
+                # grid.addWidget(self._point_projection_menu_button, 1, 5)
                 inner.addLayout(grid)
                 inner.addLayout(self._point_projection_plots_layout)
                 inner.addWidget(self._only_visible_image_stack_layers_message)
@@ -2253,7 +2259,7 @@ class MainWidget(QTabWidget):
         if self._tag_filter_checkbox.isChecked():
             self.select_projection_point()
     
-    def _edit_projection_settings(self):
+    def _edit_point_projection_settings(self):
         from qtpy.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QFormLayout, QDialogButtonBox, QSpinBox, QCheckBox
 
         dlg = QDialog(self)
@@ -2297,8 +2303,32 @@ class MainWidget(QTabWidget):
         
         self.update_point_projections()
     
-    def _store_all_point_projections_in_image_layer_metadata(self):
-        """ Store all point projections in image layer metadata.
+    def _copy_filtered_points_to_new_layer(self):
+        """ Copy filtered points to new layer.
+        """
+        # from napari.layers import Points
+
+        # points_layer = self._projection_points_layer_combobox.currentText()
+        # if points_layer not in self.viewer.layers:
+        #     return
+        # points = self.viewer.layers[points_layer]
+        # if not isinstance(points, Points):
+        #     return
+
+        # filtered_indices = self._get_filtered_point_indices(points)
+        # if len(filtered_indices) == 0:
+        #     return
+
+        # filtered_points = points.data[filtered_indices]
+        # filtered_tags = points.text[filtered_indices]
+        # filtered_properties = {key: value[filtered_indices] for key, value in points.properties.items()}
+
+        # new_points = Points(filtered_points, properties=filtered_properties, text=filtered_tags, name=f"{points.name} (filtered)")
+        # self.viewer.add_layer(new_points)
+        pass
+    
+    def _compute_and_store_all_point_projections_in_image_layer_metadata(self):
+        """ Compute and store all point projections in image layer metadata.
         """
         image_layers = self._imagestack_layers()
         points_layers = self._points_layers()
@@ -2320,10 +2350,14 @@ class MainWidget(QTabWidget):
                 n_points = len(points_layer.data)
                 n_frames = image_layer.data.shape[-3]
                 projections = np.zeros([n_points, n_frames])
+                projections.fill(np.nan)
                 for i in range(n_points):
                     if progress.wasCanceled():
                         break
-                    projections[i] = self.get_point_projection(image_layer, points_layer, point_index=i)
+                    try:
+                        projections[i] = self.get_point_projection(image_layer, points_layer, point_index=i)
+                    except:
+                        pass
                 image_layer.metadata['point_projections'][points_layer.name] = projections
                 progress.setValue(progress.value() + 1)
                 QApplication.processEvents()
@@ -2335,6 +2369,11 @@ class MainWidget(QTabWidget):
         text = text.replace(' ', '_')
         text = text.replace('[', '')
         text = text.replace(']', '')
+        text = text.replace('(', '')
+        text = text.replace(')', '')
+        if text[0].isdigit():
+            # MATLAB struct fieldnames cannot start with a digit
+            text = 'p_' + text
         return text
 
 
@@ -2680,49 +2719,48 @@ if __name__ == "__main__":
     plugin = MainWidget(viewer)
     viewer.window.add_dock_widget(plugin, name='napari-cosmos-ts', area='right')
 
-    plugin.import_session("/Users/marcel/Downloads/image_reg_test.mat")
+    # plugin.import_session("/Users/marcel/Downloads/test.mat")
+
+    viewer.add_image(
+        np.random.random([1000, 512, 512]),
+        contrast_limits=[0.8, 1],
+        name="100x512x512",
+    )
+
+    viewer.add_image(
+        da.from_array(np.random.random([3000, 512, 512]), chunks=(1000, 512, 512)),
+        contrast_limits=[0.8, 1],
+        name="3000x512x512 Dask",
+    )
+
+    viewer.add_image(
+        np.random.random([512, 512]),
+        contrast_limits=[0.8, 1],
+        name="512x512",
+    )
+
+    n_points = 100
+    viewer.add_points(
+        np.random.random([n_points, 2]) * 512,
+        symbol = "disc",
+        size = [8] * n_points,
+        face_color = [[1, 1, 0, 0.1]] * n_points,
+        border_color = [[1, 1, 0, 1]] * n_points,
+        opacity = 1,
+        blending = "translucent_no_depth",
+        name="100 points",
+    )
+
+    n_points = 50
+    viewer.add_points(
+        np.random.random([n_points, 2]) * 512,
+        symbol = "disc",
+        size = [8] * n_points,
+        face_color = [[1, 1, 0, 0.1]] * n_points,
+        border_color = [[1, 1, 0, 1]] * n_points,
+        opacity = 1,
+        blending = "translucent_no_depth",
+        name="50 points",
+    )
+
     napari.run()
-
-    # viewer.add_image(
-    #     np.random.random([1000, 512, 512]),
-    #     contrast_limits=[0.8, 1],
-    #     name="1000x512x512",
-    # )
-
-    # viewer.add_image(
-    #     da.from_array(np.random.random([3000, 512, 512]), chunks=(1000, 512, 512)),
-    #     contrast_limits=[0.8, 1],
-    #     name="3000x512x512 Dask",
-    # )
-
-    # viewer.add_image(
-    #     np.random.random([512, 512]),
-    #     contrast_limits=[0.8, 1],
-    #     name="512x512",
-    # )
-
-    # n_points = 100
-    # viewer.add_points(
-    #     np.random.random([n_points, 2]) * 512,
-    #     symbol = "disc",
-    #     size = [8] * n_points,
-    #     face_color = [[1, 1, 0, 0.1]] * n_points,
-    #     border_color = [[1, 1, 0, 1]] * n_points,
-    #     opacity = 1,
-    #     blending = "translucent_no_depth",
-    #     name="100 points",
-    # )
-
-    # n_points = 50
-    # viewer.add_points(
-    #     np.random.random([n_points, 2]) * 512,
-    #     symbol = "disc",
-    #     size = [8] * n_points,
-    #     face_color = [[1, 1, 0, 0.1]] * n_points,
-    #     border_color = [[1, 1, 0, 1]] * n_points,
-    #     opacity = 1,
-    #     blending = "translucent_no_depth",
-    #     name="50 points",
-    # )
-
-    # napari.run()
