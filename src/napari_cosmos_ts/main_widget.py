@@ -2306,26 +2306,39 @@ class MainWidget(QTabWidget):
     def _copy_filtered_points_to_new_layer(self):
         """ Copy filtered points to new layer.
         """
-        # from napari.layers import Points
+        # selected point layer to copy from
+        selected_points_layer_name = self._projection_points_layer_combobox.currentText()
+        if selected_points_layer_name == "":
+            return
+        selected_points_layer = self.viewer.layers[selected_points_layer_name]
+        if not isinstance(selected_points_layer, Points):
+            return
+        
+        # tag filtered points to copy
+        if not self._tag_filter_checkbox.isChecked() or not 'tags' in selected_points_layer.features:
+            return
+        tag_filter = [tag.strip() for tag in self._tag_filter_edit.text().split(",")]
+        filtered_point_indices = []
+        for point_index in range(len(selected_points_layer.data)):
+            tags = [tag.strip() for tag in selected_points_layer.features['tags'][point_index].split(",")]
+            if any(tag in tags for tag in tag_filter):
+                filtered_point_indices.append(point_index)
+        if len(filtered_point_indices) == 0:
+            return
 
-        # points_layer = self._projection_points_layer_combobox.currentText()
-        # if points_layer not in self.viewer.layers:
-        #     return
-        # points = self.viewer.layers[points_layer]
-        # if not isinstance(points, Points):
-        #     return
-
-        # filtered_indices = self._get_filtered_point_indices(points)
-        # if len(filtered_indices) == 0:
-        #     return
-
-        # filtered_points = points.data[filtered_indices]
-        # filtered_tags = points.text[filtered_indices]
-        # filtered_properties = {key: value[filtered_indices] for key, value in points.properties.items()}
-
-        # new_points = Points(filtered_points, properties=filtered_properties, text=filtered_tags, name=f"{points.name} (filtered)")
-        # self.viewer.add_layer(new_points)
-        pass
+        # copy filtered points to new layer
+        new_points_layer = Points(
+            selected_points_layer.data[filtered_point_indices].copy(),
+            symbol = selected_points_layer.symbol[filtered_point_indices].copy(),
+            size = selected_points_layer.size[filtered_point_indices].copy(),
+            face_color = selected_points_layer.face_color[filtered_point_indices].copy(),
+            border_color = selected_points_layer.border_color[filtered_point_indices].copy(),
+            opacity = selected_points_layer.opacity,
+            blending = selected_points_layer.blending,
+            features = selected_points_layer.features.iloc[filtered_point_indices].copy(),
+            name = f"{selected_points_layer.name} filtered"
+            )
+        self.viewer.add_layer(new_points_layer)
     
     def _compute_and_store_all_point_projections_in_image_layer_metadata(self):
         """ Compute and store all point projections in image layer metadata.
