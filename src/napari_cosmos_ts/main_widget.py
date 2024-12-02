@@ -1080,7 +1080,10 @@ class MainWidget(QTabWidget):
                     
                     # point projection
                     xdata = None  # assumed integer frames
-                    ydata = project_image_point(layer.data, layerpt2d, point_mask)
+                    try:
+                        ydata = project_image_point(layer.data, layerpt2d, point_mask)
+                    except:
+                        ydata = np.array([])
                     
                     # if not image data, look for stored point projection in layer metadata
                     if np.all(np.isnan(ydata)):
@@ -1235,7 +1238,11 @@ class MainWidget(QTabWidget):
         point_mask = make_point_mask(pixel_size, type='circle')
         
         # project point
-        point_projection = project_image_point(image_layer.data, imagept2d, point_mask)
+        try:
+            point_projection = project_image_point(image_layer.data, imagept2d, point_mask)
+        except:
+            print('Error projecting point.')
+            point_projection = np.array([])
         
         # if not image data, look for stored point projection in layer metadata
         if np.all(np.isnan(point_projection)):
@@ -2687,22 +2694,23 @@ def project_image_point(image: np.ndarray | da.Array, point2d, point_mask2d: np.
             elif isinstance(image, da.Array):
                 return da.squeeze(image[indices]).compute()
         except IndexError:
+            print(f"Single point projection out of bounds: {row}, {col}")
             return np.array([])
     
     # project mean of pixels in mask
     row, col = point2d.flatten()
     h, w = point_mask2d.shape
-    rows = np.round(row - h/2 + np.arange(h)).astype(int)
-    cols = np.round(col - w/2 + np.arange(w)).astype(int)
+    rows = int(np.round(row - h/2)) + np.arange(h, dtype=int)
+    cols = int(np.round(col - w/2)) + np.arange(w, dtype=int)
     i = np.where((rows >= 0) & (rows < image.shape[-2]))[0]
     j = np.where((cols >= 0) & (cols < image.shape[-1]))[0]
     if i.size == 0 or j.size == 0:
         return np.array([])
-    rows = rows[i].reshape([-1,1])
-    cols = cols[j].reshape([1,-1])
+    rows = rows[i]
+    cols = cols[j]
     mask = point_mask2d[i.reshape([-1,1]),j.reshape([1,-1])]
     mask = mask.reshape((1,) * (image.ndim - 2) + mask.shape)
-    indices = (slice(None),) * (image.ndim - 2) + (slice(rows[0,0], rows[-1,-1] + 1), slice(cols[0,0], cols[-1,-1] + 1))
+    indices = (slice(None),) * (image.ndim - 2) + (slice(rows[0], rows[-1] + 1), slice(cols[0], cols[-1] + 1))
     if isinstance(image, np.ndarray):
         return np.squeeze(np.mean(image[indices] * mask, axis=(-2, -1)))
     elif isinstance(image, da.Array):
